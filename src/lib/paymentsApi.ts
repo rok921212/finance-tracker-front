@@ -11,7 +11,7 @@ export interface GameOption {
   remaining?: number | null;
 }
 
-export type PaymentMethod = "cashapp" | "venmo" | "paypal" | "zelle" | "applepay";
+export type PaymentMethod = "cashapp" | "venmo" | "paypal" | "zelle" | "applepay" | "chime";
 
 export const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = [
   { value: "cashapp", label: "Cash App" },
@@ -19,6 +19,7 @@ export const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = [
   { value: "paypal", label: "PayPal" },
   { value: "zelle", label: "Zelle" },
   { value: "applepay", label: "Apple Pay" },
+  { value: "chime", label: "Chime" },
 ];
 
 export const paymentMethodLabel = (m?: string | null) =>
@@ -128,6 +129,9 @@ export interface AdminGame {
   totalPoints: number | null;
   /** Loaded amount of every entry for this game */
   used: number;
+  /** Redeemed amount of every entry for this game; goes back into the pool */
+  redeemed: number;
+  /** totalPoints - used + redeemed */
   remaining: number | null;
 }
 
@@ -147,6 +151,9 @@ export interface PaymentFilters {
   userId?: string;
   gameId?: string;
   search?: string;
+  paymentMethod?: string;
+  /** Player name (prefix match) */
+  player?: string;
 }
 
 // Drop empty values so the backend only sees real filters
@@ -307,13 +314,15 @@ export const adminMoveGame = async (id: string, direction: "up" | "down") => {
 
 export const adminAudit = (page: number) => cachedGet<Paged<AuditRow>>("/admin/audit", { page });
 
-/** Download the CSV through the authenticated client so the token is never put in a URL. */
-export const downloadPaymentsCsv = async (f: PaymentFilters) => {
-  const res = await http.get("/admin/payments/export.csv", { params: clean({ ...f }), responseType: "blob" });
+export type ExportFormat = "csv" | "pdf";
+
+/** Download the filtered export through the authenticated client so the token is never put in a URL. */
+export const downloadPaymentsExport = async (f: PaymentFilters, format: ExportFormat) => {
+  const res = await http.get(`/admin/payments/export.${format}`, { params: clean({ ...f }), responseType: "blob" });
   const url = URL.createObjectURL(res.data as Blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `payments-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `payments-${new Date().toISOString().slice(0, 10)}.${format}`;
   document.body.appendChild(a);
   a.click();
   a.remove();

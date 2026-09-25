@@ -17,7 +17,8 @@ import {
   adminPayments,
   adminUsers,
   clean,
-  downloadPaymentsCsv,
+  downloadPaymentsExport,
+  ExportFormat,
   GameOption,
   GameSummaryRow,
   Paged,
@@ -41,7 +42,7 @@ const TABS: [Tab, string][] = [
   ["games", "Games"],
   ["audit", "Audit Log"],
 ];
-const FILTER_KEYS: (keyof PaymentFilters)[] = ["dateFrom", "dateTo", "gameId", "search"];
+const FILTER_KEYS: (keyof PaymentFilters)[] = ["dateFrom", "dateTo", "gameId", "search", "paymentMethod", "player"];
 
 /** Filters live in the URL so views are shareable and survive reloads. */
 const useUrlState = () => {
@@ -568,7 +569,7 @@ const AdminDashboard: React.FC = () => {
   const { tab, userId, filters, update } = useUrlState();
   const [games, setGames] = useState<GameOption[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
-  const [exporting, setExporting] = useState(false);
+  const [exporting, setExporting] = useState<ExportFormat | null>(null);
   const [error, setError] = useState("");
 
   // Admin filter dropdown includes disabled games so historical data stays filterable
@@ -581,15 +582,15 @@ const AdminDashboard: React.FC = () => {
   const gamesChanged = useDropTick("/admin/games");
   useEffect(loadGames, [loadGames, gamesChanged]);
 
-  const onExport = async () => {
-    setExporting(true);
+  const onExport = async (format: ExportFormat) => {
+    setExporting(format);
     setError("");
     try {
-      await downloadPaymentsCsv(filters);
+      await downloadPaymentsExport(filters, format);
     } catch (e) {
       setError(errorMessage(e, "Export failed"));
     } finally {
-      setExporting(false);
+      setExporting(null);
     }
   };
 

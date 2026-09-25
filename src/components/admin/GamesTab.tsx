@@ -93,6 +93,9 @@ const GamesTab: React.FC<{ onChanged: () => void }> = ({ onChanged }) => {
             <Th>Name</Th>
             <Th>Total Points</Th>
             <Th right>Used</Th>
+            <Th right>
+              <span title="Redeemed points go back into the pool: Remaining = Total - Used + Redeemed">Redeemed (returned)</span>
+            </Th>
             <Th right>Remaining</Th>
             <Th>Status</Th>
             <Th right>Actions</Th>
@@ -181,6 +184,7 @@ const GamesTab: React.FC<{ onChanged: () => void }> = ({ onChanged }) => {
               </form>
             </Td>
             <Td right>{formatCents(g.used)}</Td>
+            <Td right className="text-purple-300">{formatCents(g.redeemed ?? 0)}</Td>
             <Td right className={`${g.remaining != null && g.remaining <= 0 ? "text-red-400" : "text-white"}`}>
               {g.remaining == null ? "—" : formatCents(g.remaining)}
             </Td>

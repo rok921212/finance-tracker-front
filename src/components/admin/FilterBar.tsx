@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Button, inputClass } from "../ui/ui";
-import { GameOption, PaymentFilters } from "../../lib/paymentsApi";
+import { ExportFormat, GameOption, PAYMENT_METHODS, PaymentFilters } from "../../lib/paymentsApi";
 import { toDayString } from "../../utils/money";
 
 type Quick = "all" | "today" | "yesterday" | "7d" | "month" | "custom";
@@ -36,8 +36,9 @@ interface Props {
   onChange: (f: PaymentFilters) => void;
   games: GameOption[];
   showUserSearch?: boolean;
-  onExport?: () => void;
-  exporting?: boolean;
+  onExport?: (format: ExportFormat) => void;
+  /** Format currently being exported, if any */
+  exporting?: ExportFormat | null;
 }
 
 const QUICK_LABELS: [Quick, string][] = [
@@ -52,14 +53,17 @@ const QUICK_LABELS: [Quick, string][] = [
 const FilterBar: React.FC<Props> = ({ filters, onChange, games, showUserSearch = true, onExport, exporting }) => {
   const [quick, setQuick] = useState<Quick>(detectQuick(filters));
   const [search, setSearch] = useState(filters.search || "");
+  const [player, setPlayer] = useState(filters.player || "");
 
-  // Debounce the user search so each keystroke doesn't hit the API
+  // Debounce the user and player searches so each keystroke doesn't hit the API
   useEffect(() => {
     const t = setTimeout(() => {
-      if ((filters.search || "") !== search) onChange({ ...filters, search: search || undefined });
+      if ((filters.search || "") !== search || (filters.player || "") !== player) {
+        onChange({ ...filters, search: search || undefined, player: player.trim() || undefined });
+      }
     }, 300);
     return () => clearTimeout(t);
-  }, [search]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [search, player]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="space-y-3">
@@ -80,7 +84,7 @@ const FilterBar: React.FC<Props> = ({ filters, onChange, games, showUserSearch =
           </button>
         ))}
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 items-end">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 items-end">
         <label className="text-xs text-gray-400">
           From
           <input
@@ -112,6 +116,25 @@ const FilterBar: React.FC<Props> = ({ filters, onChange, games, showUserSearch =
           </label>
         )}
         <label className="text-xs text-gray-400">
+          Player
+          <input className={inputClass} placeholder="Player name" value={player} onChange={(e) => setPlayer(e.target.value)} />
+        </label>
+        <label className="text-xs text-gray-400">
+          Payment
+          <select
+            className={inputClass}
+            value={filters.paymentMethod || ""}
+            onChange={(e) => onChange({ ...filters, paymentMethod: e.target.value || undefined })}
+          >
+            <option value="">All methods</option>
+            {PAYMENT_METHODS.map((m) => (
+              <option key={m.value} value={m.value}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="text-xs text-gray-400">
           Game
           <select className={inputClass} value={filters.gameId || ""} onChange={(e) => onChange({ ...filters, gameId: e.target.value || undefined })}>
             <option value="">All games</option>
@@ -128,15 +151,21 @@ const FilterBar: React.FC<Props> = ({ filters, onChange, games, showUserSearch =
             onClick={() => {
               setQuick("all");
               setSearch("");
+              setPlayer("");
               onChange({ userId: filters.userId });
             }}
           >
             Reset
           </Button>
           {onExport && (
-            <Button variant="ghost" onClick={onExport} loading={exporting} title="Export filtered rows as CSV">
-              CSV
-            </Button>
+            <>
+              <Button variant="ghost" onClick={() => onExport("csv")} loading={exporting === "csv"} disabled={!!exporting} title="Export filtered rows as CSV">
+                CSV
+              </Button>
+              <Button variant="ghost" onClick={() => onExport("pdf")} loading={exporting === "pdf"} disabled={!!exporting} title="Export filtered rows as PDF">
+                PDF
+              </Button>
+            </>
           )}
         </div>
       </div>
