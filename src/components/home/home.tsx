@@ -1,11 +1,28 @@
 import React, { useEffect, useState, ChangeEvent, FormEvent } from "react";
 import Display from "../displayCustomers/display.tsx";
-import { Team, Booking, fetchTeams, createTeam, addBooking, updateBooking, deleteBooking, deleteTeam } from "../../api";
+import {
+  Team,
+  Booking,
+  fetchTeams,
+  createTeam,
+  addBooking,
+  updateBooking,
+  deleteBooking,
+  deleteTeam,
+  updateCachedTeams,
+} from "../../api";
+import { peekCached, useDropTick } from "../../lib/cache";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "../../context/AuthContext";
+import { Link } from "react-router-dom";
 
 const TeamSelector: React.FC = () => {
-  const [teams, setTeams] = useState<Team[]>([]);
+  // Start from the cached copy (instant render), then revalidate
+  const [teams, setTeams] = useState<Team[]>(() => peekCached<Team[]>("/bookingData") || []);
+  // Local delta updates also refresh the cached copy, so returning to this page is instant
+  useEffect(() => {
+    updateCachedTeams(() => teams);
+  }, [teams]);
   const [selectedTeams, setSelectedTeams] = useState<string[]>([]);
   const [message, setMessage] = useState<string>("");
   const [newTeamName, setNewTeamName] = useState<string>("");
@@ -39,9 +56,12 @@ const TeamSelector: React.FC = () => {
     }
   };
 
+  // Loaded from the cache; refetched only when the server pushes a change made elsewhere
+  const teamsChanged = useDropTick("/bookingData");
   useEffect(() => {
     loadTeams();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teamsChanged]);
 
   const handleCheckboxChange = (teamName: string): void => {
     setSelectedTeams((prev) =>
@@ -57,9 +77,28 @@ const TeamSelector: React.FC = () => {
     updatedBooking: Booking
   ): Promise<void> => {
     try {
-      await updateBooking(teamName, bookingIndex, updatedBooking);
+      // Delta update: send only the fields that actually changed
+      const current = teams.find((t) => t.teamName === teamName)?.bookings[bookingIndex];
+      const changes: Partial<Booking> = {};
+      (Object.keys(updatedBooking) as (keyof Booking)[]).forEach((k) => {
+        // Skip ids and UI-only fields (e.g. _parsedDate) added by the table
+        if (!String(k).startsWith("_") && (!current || current[k] !== updatedBooking[k])) {
+          (changes as Record<string, unknown>)[k] = updatedBooking[k];
+        }
+      });
+      if (Object.keys(changes).length === 0) {
+        setMessage("No changes to save");
+        return;
+      }
+      const stored = await updateBooking(teamName, bookingIndex, changes);
+      setTeams((prev) =>
+        prev.map((t) =>
+          t.teamName === teamName
+            ? { ...t, bookings: t.bookings.map((b, i) => (i === bookingIndex ? { ...b, ...stored } : b)) }
+            : t
+        )
+      );
       setMessage("Booking updated successfully");
-      await loadTeams();
     } catch (error: unknown) {
       const err = error as Error;
       setMessage("Failed to update booking: " + err.message);
@@ -71,8 +110,10 @@ const TeamSelector: React.FC = () => {
       return;
     try {
       await deleteBooking(teamName, bookingIndex);
+      setTeams((prev) =>
+        prev.map((t) => (t.teamName === teamName ? { ...t, bookings: t.bookings.filter((_, i) => i !== bookingIndex) } : t))
+      );
       setMessage("Booking deleted successfully");
-      await loadTeams();
     } catch (error: unknown) {
       const err = error as Error;
       setMessage("Failed to delete booking: " + err.message);
@@ -84,8 +125,8 @@ const TeamSelector: React.FC = () => {
 
     try {
       await deleteTeam(teamName);
+      setTeams((prev) => prev.filter((t) => t.teamName !== teamName));
       setMessage(`Team "${teamName}" deleted successfully.`);
-      await loadTeams();
       setSelectedTeams((prev) => prev.filter((t) => t !== teamName));
     } catch (error: unknown) {
       const err = error as Error;
@@ -130,11 +171,19 @@ const TeamSelector: React.FC = () => {
 
     setIsSubmitting(true);
     try {
-      await Promise.all(
-        selectedTeams.map((teamName) =>
-          addBooking(teamName, booking)
-        )
+      // Each response carries only the new booking; append it locally instead of refetching all teams
+      const results = await Promise.allSettled(
+        selectedTeams.map(async (teamName) => ({ teamName, stored: await addBooking(teamName, booking) }))
       );
+      const added = results.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+      const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+      setTeams((prev) =>
+        prev.map((t) => {
+          const hit = added.find((a) => a.teamName === t.teamName);
+          return hit ? { ...t, bookings: [...t.bookings, hit.stored] } : t;
+        })
+      );
+      if (failed) throw failed.reason;
       setMessage("Booking added successfully to selected teams!");
       setBooking({
         customerName: "",
@@ -150,7 +199,6 @@ const TeamSelector: React.FC = () => {
         productionCost: 0,
       });
       setSelectedTeams([]);
-      await loadTeams();
     } catch (error: unknown) {
       const axiosError = error as { response?: { data?: { message?: string; error?: string } }; message?: string };
       const errMsg =
@@ -222,6 +270,12 @@ const TeamSelector: React.FC = () => {
                 </>
               )}
             </motion.button>
+            <Link
+              to="/payments"
+              className="flex items-center gap-2 px-4 py-2 bg-gray-700/50 border border-gray-600 text-gray-300 rounded-lg hover:bg-gray-700 hover:text-white transition-all"
+            >
+              ← Payments
+            </Link>
             <motion.button
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}

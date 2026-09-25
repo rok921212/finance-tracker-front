@@ -2,6 +2,17 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Lightweight enter animations (instead of framer-motion on the core pages) */
+@keyframes anim-in { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: none; } }
+@keyframes anim-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes anim-pop { from { transform: scale(0.95) translateY(10px); } to { transform: none; } }
+.anim-in { animation: anim-in 0.5s ease-out both; }
+.anim-fade { animation: anim-fade 0.15s ease-out both; }
+.anim-pop { animation: anim-pop 0.15s ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .anim-in, .anim-fade, .anim-pop { animation: none; }
+}
+
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',

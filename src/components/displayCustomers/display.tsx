@@ -1,9 +1,25 @@
 import React, { useState, ChangeEvent, useMemo, useRef, useEffect, useCallback } from "react";
 import { Team, Booking } from "../../api";
 import { motion, AnimatePresence } from "framer-motion";
-import html2canvas from "html2canvas";
 import { formatDisplayDateCompact, parseDate } from "../../utils/date";
-import axios from "axios";
+
+// html2canvas is only needed when exporting, so it is downloaded on first use
+const loadHtml2canvas = () => import("html2canvas").then((m) => m.default);
+
+// QR images stay in the browser: shrunk to 200x200 (their largest display size) as a data URL,
+// so nothing is uploaded or stored and the export canvas has no cross-origin images
+const toQrDataUrl = async (file: File): Promise<string> => {
+  const bitmap = await createImageBitmap(file);
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 200;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas not supported");
+  // Center-crop to a square, like the previous c_fill transformation
+  const side = Math.min(bitmap.width, bitmap.height);
+  ctx.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, 200, 200);
+  bitmap.close();
+  return canvas.toDataURL("image/png");
+};
 
 interface DisplayBookingsProps {
   teams: Team[];
@@ -71,15 +87,6 @@ const DisplayBookings: React.FC<DisplayBookingsProps> = ({
   const [showQrModal, setShowQrModal] = useState(false);
   const [massExport, setMassExport] = useState(false);
   const massPrintRef = useRef<HTMLDivElement>(null);
-
-  const uploadToCloudinary = async (file: File): Promise<string> => {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('upload_preset', 'react_upload');
-    const response = await axios.post(`https://api.cloudinary.com/v1_1/dj181g1it/image/upload`, formData);
-    const publicId = response.data.public_id;
-    return `https://res.cloudinary.com/dj181g1it/image/upload/w_600,h_600,c_fill,f_avif/${publicId}.avif`;
-  };
 
   // Debounce search term to improve performance
   useEffect(() => {
@@ -231,6 +238,7 @@ const DisplayBookings: React.FC<DisplayBookingsProps> = ({
     if (!massPrintRef.current) return;
 
     try {
+      const html2canvas = await loadHtml2canvas();
       const canvas = await html2canvas(massPrintRef.current, {
         background: '#ffffff',
         useCORS: true,
@@ -316,6 +324,7 @@ const DisplayBookings: React.FC<DisplayBookingsProps> = ({
     if (!printRef.current) return;
     
     try {
+      const html2canvas = await loadHtml2canvas();
       const canvas = await html2canvas(printRef.current, {
         background: '#ffffff',
         useCORS: true,
@@ -1078,7 +1087,7 @@ const DisplayBookings: React.FC<DisplayBookingsProps> = ({
                       accept="image/*"
                       onChange={async (e) => {
                         if (e.target.files && e.target.files[0]) {
-                          const url = await uploadToCloudinary(e.target.files[0]);
+                          const url = await toQrDataUrl(e.target.files[0]);
                           setQr1(url);
                         }
                       }}
@@ -1096,7 +1105,7 @@ const DisplayBookings: React.FC<DisplayBookingsProps> = ({
                       accept="image/*"
                       onChange={async (e) => {
                         if (e.target.files && e.target.files[0]) {
-                          const url = await uploadToCloudinary(e.target.files[0]);
+                          const url = await toQrDataUrl(e.target.files[0]);
                           setQr2(url);
                         }
                       }}
@@ -1114,7 +1123,7 @@ const DisplayBookings: React.FC<DisplayBookingsProps> = ({
                       accept="image/*"
                       onChange={async (e) => {
                         if (e.target.files && e.target.files[0]) {
-                          const url = await uploadToCloudinary(e.target.files[0]);
+                          const url = await toQrDataUrl(e.target.files[0]);
                           setQr3(url);
                         }
                       }}
@@ -1132,7 +1141,7 @@ const DisplayBookings: React.FC<DisplayBookingsProps> = ({
                       accept="image/*"
                       onChange={async (e) => {
                         if (e.target.files && e.target.files[0]) {
-                          const url = await uploadToCloudinary(e.target.files[0]);
+                          const url = await toQrDataUrl(e.target.files[0]);
                           setQr4(url);
                         }
                       }}
