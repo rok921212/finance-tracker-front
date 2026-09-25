@@ -65,6 +65,12 @@ async function connect() {
       handleExpiredSession();
       return;
     }
+    // Server without a live stream (e.g. an older deployment): don't keep reconnecting;
+    // the cache simply revalidates as it does whenever the stream is down
+    if (res.status === 404 || res.status === 405) {
+      stopLiveEvents();
+      return;
+    }
     if (!res.ok || !res.body) throw new Error(`events: HTTP ${res.status}`);
     const reader = res.body.getReader();
     const decoder = new TextDecoder();

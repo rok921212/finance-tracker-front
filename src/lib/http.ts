@@ -1,7 +1,6 @@
 import axios, { AxiosError } from "axios";
 
-export const API_BASE_URL =
-  process.env.REACT_APP_API_URL || "https://finance-tracker-backend-yuhn.onrender.com/api";
+export const API_BASE_URL = "https://finance-tracker-backend-yuhn.onrender.com/api";
 
 const http = axios.create({ baseURL: API_BASE_URL, timeout: 60000 });
 
@@ -49,6 +48,10 @@ export const errorMessage = (error: unknown, fallback = "Something went wrong"):
   if (!e.response) return e.code === "ECONNABORTED" ? "Request timed out. Please try again." : "Network error. Check your connection.";
   const { status } = e.response;
   const data = e.response.data || {};
+  // A 404 without our JSON error body means the route itself is missing: the API is an older deployment
+  if (status === 404 && (typeof data !== "object" || (!data.code && !data.message))) {
+    return "The server is out of date. Please try again shortly.";
+  }
   if (status === 401) {
     return isAuthCall(e.config?.url || "") ? data.message || "Invalid username or password" : "Your session has expired. Please sign in again.";
   }
