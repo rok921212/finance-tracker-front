@@ -1,15 +1,10 @@
-import axios from "axios";
-
-const API_BASE_URL = "https://finance-app-back-i6r7.onrender.com/api";
-
-// Helper function to get auth headers
-const getAuthHeaders = () => {
-  const token = localStorage.getItem("token");
-  return token ? { Authorization: `Bearer ${token}` } : {};
-};
+// Shared client adds the base URL and auth header
+import http from "./lib/http";
+import { cachedGet, trackedWrite, updateCached } from "./lib/cache";
 
 // Type definitions
 export interface Booking {
+  _id?: string;
   customerName?: string;
   date: string;
   time: string;
@@ -41,45 +36,45 @@ export interface ApiResponse<T> {
 }
 
 // API functions
-export const fetchTeams = async (): Promise<Team[]> => {
-  const response = await axios.get<Team[]>(`${API_BASE_URL}/bookingData`, {
-    headers: getAuthHeaders(),
-  });
-  return response.data;
-};
+// Served from the cache until the server pushes a change to this user's bookings
+export const fetchTeams = (): Promise<Team[]> => cachedGet<Team[]>("/bookingData");
+
+/** Keep the cached team list in step with local delta updates. */
+export const updateCachedTeams = (fn: (teams: Team[]) => Team[]) => updateCached<Team[]>("/bookingData", undefined, fn);
+
+// Own booking writes: the page patches the cached team list itself, so the server's push for this
+// very write must not trigger a refetch (a change from another device still does)
+const TEAMS = { url: "/bookingData" };
+const write = <R extends { headers: Record<string, unknown> }>(send: () => Promise<R>) => trackedWrite("bookings", TEAMS, send);
 
 export const createTeam = async (teamData: CreateTeamRequest): Promise<Team> => {
-  const response = await axios.post<Team>(`${API_BASE_URL}/bookingData`, teamData, {
-    headers: getAuthHeaders(),
-  });
+  const response = await write(() => http.post<Team>(`/bookingData`, teamData));
   return response.data;
 };
 
 export const deleteTeam = async (teamName: string): Promise<void> => {
   const encodedName = encodeURIComponent(teamName);
-  await axios.delete(`${API_BASE_URL}/bookingData/${encodedName}`, {
-    headers: getAuthHeaders(),
-  });
+  await write(() => http.delete(`/bookingData/${encodedName}`));
 };
 
-export const addBooking = async (teamName: string, booking: Booking): Promise<void> => {
+/** Server responds with only the stored booking (not the whole team). */
+export const addBooking = async (teamName: string, booking: Booking): Promise<Booking> => {
   const encodedName = encodeURIComponent(teamName);
-  await axios.post(`${API_BASE_URL}/bookingData/${encodedName}/bookings`, booking, {
-    headers: getAuthHeaders(),
-  });
+  const res = await write(() => http.post<{ booking: Booking }>(`/bookingData/${encodedName}/bookings`, booking));
+  return res.data.booking;
 };
 
+/** Send only changed fields; server responds with just those fields as stored. */
 export const updateBooking = async (
   teamName: string,
   bookingIndex: number,
-  updatedBooking: Booking
-): Promise<void> => {
+  changes: Partial<Booking>
+): Promise<Partial<Booking>> => {
   const encodedName = encodeURIComponent(teamName);
-  await axios.put(
-    `${API_BASE_URL}/bookingData/${encodedName}/bookings/${bookingIndex}`,
-    updatedBooking,
-    { headers: getAuthHeaders() }
+  const res = await write(() =>
+    http.put<{ index: number; changes: Partial<Booking> }>(`/bookingData/${encodedName}/bookings/${bookingIndex}`, changes)
   );
+  return res.data.changes;
 };
 
 export const deleteBooking = async (
@@ -87,9 +82,7 @@ export const deleteBooking = async (
   bookingIndex: number
 ): Promise<void> => {
   const encodedName = encodeURIComponent(teamName);
-  await axios.delete(`${API_BASE_URL}/bookingData/${encodedName}/bookings/${bookingIndex}`, {
-    headers: getAuthHeaders(),
-  });
+  await write(() => http.delete(`/bookingData/${encodedName}/bookings/${bookingIndex}`));
 };
 
 // Export default object with all API methods
