@@ -6,8 +6,8 @@ import FilterBar from "./FilterBar";
 import PaymentsTable from "./PaymentsTable";
 import PaymentDetailModal from "./PaymentDetailModal";
 import EditHistory from "./EditHistory";
-import GamesTab from "./GamesTab";
 import AuditTab from "./AuditTab";
+import GamesTab from "./GamesTab";
 import { DeleteUserModal, EditUserModal, ManagedUser } from "./UserModals";
 import {
   adminCreateUser,
@@ -47,7 +47,8 @@ const FILTER_KEYS: (keyof PaymentFilters)[] = ["dateFrom", "dateTo", "gameId", "
 /** Filters live in the URL so views are shareable and survive reloads. */
 const useUrlState = () => {
   const [params, setParams] = useSearchParams();
-  const tab = (params.get("tab") as Tab) || "overview";
+  // Unknown tabs (e.g. an old ?tab=games link) fall back to the overview
+  const tab = TABS.find(([t]) => t === params.get("tab"))?.[0] ?? "overview";
   const userId = params.get("user") || undefined;
   const filters = useMemo(() => {
     const f: PaymentFilters = {};
@@ -582,11 +583,11 @@ const AdminDashboard: React.FC = () => {
   const gamesChanged = useDropTick("/admin/games");
   useEffect(loadGames, [loadGames, gamesChanged]);
 
-  const onExport = async (format: ExportFormat) => {
+  const onExport = async (format: ExportFormat, columns: string[]) => {
     setExporting(format);
     setError("");
     try {
-      await downloadPaymentsExport(filters, format);
+      await downloadPaymentsExport(filters, format, columns);
     } catch (e) {
       setError(errorMessage(e, "Export failed"));
     } finally {

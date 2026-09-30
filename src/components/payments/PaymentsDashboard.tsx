@@ -1,12 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import AppHeader from "./AppHeader";
 import { Page, Card, StatCard, Banner, Pagination, Spinner, inputClass } from "../ui/ui";
 import ImageViewer from "../ui/ImageViewer";
 import {
   deleteMyPayment,
-  GameOption,
-  getActiveGames,
   getMyPayment,
   getMyPayments,
   getMySummary,
@@ -23,6 +21,7 @@ import {
 import { peekCached, updateCached, useDropTick } from "../../lib/cache";
 import { mergeChanges, useDeltaSync } from "../../lib/deltaSync";
 import { errorMessage } from "../../lib/http";
+import { preloadImage } from "../../lib/preloadImage";
 import { formatCents, formatDay } from "../../utils/money";
 
 const SORTS: MySort[] = ["date", "deposit", "loaded", "redeemed", "cashout", "player"];
@@ -57,27 +56,7 @@ const readView = (sp: URLSearchParams): MyListView => {
 const sortValue = (view: MyListView) =>
   view.sort ? `${view.sort}:${view.order || (view.sort === "player" ? "asc" : "desc")}` : view.order === "asc" ? "date:asc" : "";
 
-// Remembered per browser; storage can be unavailable (private mode), so failures are ignored
-const POINTS_OPEN_KEY = "gamePointsOpen";
-const readPointsOpen = () => {
-  try {
-    return localStorage.getItem(POINTS_OPEN_KEY) !== "0";
-  } catch {
-    return true;
-  }
-};
-
 const PaymentsDashboard: React.FC = () => {
-  const [pointsOpen, setPointsOpen] = useState(readPointsOpen);
-  const togglePoints = () =>
-    setPointsOpen((open) => {
-      try {
-        localStorage.setItem(POINTS_OPEN_KEY, open ? "0" : "1");
-      } catch {
-        // not persisted; still toggles for this visit
-      }
-      return !open;
-    });
   const [page, setPage] = useState(1);
   const [searchParams, setSearchParams] = useSearchParams();
   const view = useMemo(() => readView(searchParams), [searchParams]);
@@ -119,7 +98,6 @@ const PaymentsDashboard: React.FC = () => {
   const [summary, setSummary] = useState<MySummary | null>(
     () => peekCached<MySummary>("/payments/summary", view.player ? { player: view.player } : undefined) || null
   );
-  const [games, setGames] = useState<GameOption[] | null>(() => peekCached<GameOption[]>("/games") || null);
   const [data, setData] = useState<Paged<PaymentRow> | null>(
     () => peekCached<Paged<PaymentRow>>("/payments", myPaymentsParams(1, view)) || null
   );
@@ -137,23 +115,26 @@ const PaymentsDashboard: React.FC = () => {
     getMySummary(view.player)
       .then(setSummary)
       .catch((e) => setError(errorMessage(e, "Could not load summary")));
-    // Game points left change with every entry, so refresh them alongside the totals
-    getActiveGames()
-      .then(setGames)
-      .catch(() => {});
   }, [view.player]);
-  // Refetched only when the server pushes a change to the totals or the games
+  // Refetched only when the server pushes a change to the totals
   const summaryChanged = useDropTick("/payments/summary", view.player ? { player: view.player } : undefined);
-  const gamesChanged = useDropTick("/games");
-  useEffect(loadSummary, [loadSummary, summaryChanged, gamesChanged]);
+  useEffect(loadSummary, [loadSummary, summaryChanged]);
 
+  // The page/view whose rows are on screen: refetching that same page (after a delete, or a pushed
+  // change) keeps the cards visible instead of blanking the list behind a spinner
+  const shownKey = useRef("");
   const loadPage = useCallback(() => {
     let cancelled = false;
+    const key = JSON.stringify(myPaymentsParams(page, view));
     const cached = peekCached<Paged<PaymentRow>>("/payments", myPaymentsParams(page, view));
     if (cached) setData(cached);
-    setLoading(!cached);
+    setLoading(!cached && shownKey.current !== key);
     getMyPayments(page, view)
-      .then((d) => !cancelled && setData(d))
+      .then((d) => {
+        if (cancelled) return;
+        shownKey.current = key;
+        setData(d);
+      })
       .catch((e) => !cancelled && setError(errorMessage(e, "Could not load entries")))
       .finally(() => !cancelled && setLoading(false));
     return () => {
@@ -192,6 +173,12 @@ const PaymentsDashboard: React.FC = () => {
 
   const openPreview = (p: PaymentRow, kind: "screenshot" | "cashoutProof" = "screenshot") => {
     const thumb = kind === "cashoutProof" ? p.cashoutThumb || null : p.thumb;
+    // The row already carries the full-size URL: open it straight away (usually already preloaded)
+    const full = kind === "cashoutProof" ? p.cashoutShot : p.shot;
+    if (full) {
+      setPreview({ id: p.id, kind, thumb, full });
+      return;
+    }
     setPreview({ id: p.id, kind, thumb, full: null });
     getMyPayment(p.id)
       .then((d) =>
@@ -218,9 +205,10 @@ const PaymentsDashboard: React.FC = () => {
       prev ? { ...prev, items: prev.items.filter((x) => x.id !== p.id), total: Math.max(0, prev.total - 1) } : prev
     );
     try {
-      await deleteMyPayment(p.id);
-      loadSummary();
-      loadPage(); // refill the page from the server (cache was invalidated)
+      // Only a page with rows after it needs refilling from the server; otherwise the card is simply
+      // gone and just the totals are refetched (both refetches are triggered by the cache drop)
+      const complete = !!before && before.pages <= 1;
+      await deleteMyPayment(p.id, { params: myPaymentsParams(page, view), complete });
     } catch (e) {
       setData(before);
       setError(errorMessage(e, "Could not delete the entry"));
@@ -252,67 +240,6 @@ const PaymentsDashboard: React.FC = () => {
           </StatCard>
           <StatCard label="Total Cashout" tone="yellow" value={summary ? formatCents(summary.totalCashout || 0) : "—"} />
         </div>
-
-        {!!games?.length && (
-          <Card
-            title="Game Points"
-            actions={
-              <button
-                type="button"
-                onClick={togglePoints}
-                aria-expanded={pointsOpen}
-                aria-controls="game-points-list"
-                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm text-gray-300 border border-gray-600 hover:text-white hover:border-gray-400"
-              >
-                {pointsOpen ? "Collapse" : "Expand"}
-                <svg
-                  className={`w-4 h-4 transition-transform duration-200 ${pointsOpen ? "rotate-180" : ""}`}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-            }
-          >
-            {!pointsOpen ? (
-              <button type="button" onClick={togglePoints} className="text-sm text-gray-400 hover:text-gray-200">
-                {games.length} {games.length === 1 ? "game" : "games"}
-                {(() => {
-                  const out = games.filter((g) => g.totalPoints != null && (g.remaining ?? 0) <= 0).length;
-                  return out ? ` · ${out} out of points` : "";
-                })()}{" "}
-                · click to show
-              </button>
-            ) : (
-            <ul id="game-points-list" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              {games.map((g) => (
-                <li key={g.id} className="rounded-lg border border-white/10 bg-white/5 px-4 py-3">
-                  <div className="text-white font-medium truncate">{g.name}</div>
-                  {g.totalPoints == null ? (
-                    <div className="text-sm text-gray-400 mt-1">Unlimited</div>
-                  ) : (
-                    <div className="mt-1 space-y-0.5 text-sm">
-                      <div className="flex justify-between gap-2">
-                        <span className="text-gray-400">Total</span>
-                        <span className="text-white tabular-nums">{formatCents(g.totalPoints)}</span>
-                      </div>
-                      <div className="flex justify-between gap-2">
-                        <span className="text-gray-400">Remaining</span>
-                        <span className={`tabular-nums ${(g.remaining ?? 0) <= 0 ? "text-red-400" : "text-green-300"}`}>
-                          {formatCents(Math.max(0, g.remaining ?? 0))}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ul>
-            )}
-          </Card>
-        )}
 
         <Card
           title="My Entries"
@@ -388,6 +315,8 @@ const PaymentsDashboard: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => openPreview(p)}
+                        onPointerEnter={() => preloadImage(p.shot)}
+                        onFocus={() => preloadImage(p.shot)}
                         title="View screenshot"
                         aria-label="View screenshot"
                         className="shrink-0 rounded-lg cursor-zoom-in focus:outline-none focus:ring-2 focus:ring-red-500 hover:opacity-80"
@@ -410,6 +339,13 @@ const PaymentsDashboard: React.FC = () => {
                     <div className="min-w-0 flex-1">
                       <p className="font-semibold text-white truncate">{p.game || "—"}</p>
                       <p className="text-sm text-gray-400">{formatDay(p.date)}</p>
+                      {(p.gameUsername || p.paymentTag) && (
+                        <p className="text-xs text-gray-400 truncate">
+                          {p.gameUsername && <>Backend username: <span className="text-gray-200">{p.gameUsername}</span></>}
+                          {p.gameUsername && p.paymentTag && " · "}
+                          {p.paymentTag && <>Tag: <span className="text-gray-200">{p.paymentTag}</span></>}
+                        </p>
+                      )}
                       {(p.player || p.paymentMethod) && (
                         <p className="text-sm text-gray-300 truncate" title={p.player || undefined}>
                           {p.player || "—"} · {paymentMethodLabel(p.paymentMethod)}
@@ -454,6 +390,8 @@ const PaymentsDashboard: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => openPreview(p, "cashoutProof")}
+                            onPointerEnter={() => preloadImage(p.cashoutShot)}
+                            onFocus={() => preloadImage(p.cashoutShot)}
                             title="View cashout screenshot"
                             aria-label="View cashout screenshot"
                             className="block mt-1 rounded cursor-zoom-in focus:outline-none focus:ring-2 focus:ring-yellow-500 hover:opacity-80"

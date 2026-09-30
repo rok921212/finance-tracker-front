@@ -2,6 +2,7 @@ import React from "react";
 import { Table, Th, Td, Pagination } from "../ui/ui";
 import { Paged, PaymentRow, paymentMethodLabel } from "../../lib/paymentsApi";
 import { formatCents, formatDay } from "../../utils/money";
+import { preloadImage } from "../../lib/preloadImage";
 
 interface Props {
   data: Paged<PaymentRow> | null;
@@ -22,7 +23,9 @@ const PaymentsTable: React.FC<Props> = ({ data, loading, onOpen, onPage, showUse
           <Th>Date</Th>
           <Th>Game</Th>
           <Th>Player</Th>
+          <Th>Backend Username</Th>
           <Th>Method</Th>
+          <Th>Tag</Th>
           <Th right>Deposit</Th>
           <Th right>Loaded</Th>
           <Th right>Redeemed</Th>
@@ -34,12 +37,23 @@ const PaymentsTable: React.FC<Props> = ({ data, loading, onOpen, onPage, showUse
     >
       {!loading &&
         data?.items.map((p) => (
-          <tr key={p.id} className="hover:bg-white/5 cursor-pointer" onClick={() => onOpen(p.id)}>
+          <tr
+            key={p.id}
+            className="hover:bg-white/5 cursor-pointer"
+            onClick={() => onOpen(p.id)}
+            onPointerEnter={() => {
+              // Warm the images the detail popup will show
+              preloadImage(p.shot);
+              preloadImage(p.cashoutShot);
+            }}
+          >
             {showUser && <Td className="font-medium text-white">{p.user?.username || "—"}</Td>}
             <Td>{formatDay(p.date)}</Td>
             <Td>{p.game || "—"}</Td>
             <Td>{p.player || "—"}</Td>
+            <Td>{p.gameUsername || "—"}</Td>
             <Td>{paymentMethodLabel(p.paymentMethod)}</Td>
+            <Td>{p.paymentTag || "—"}</Td>
             <Td right>{formatCents(p.deposit)}</Td>
             <Td right>{formatCents(p.loaded)}</Td>
             <Td right>{formatCents(p.redeemed || 0)}</Td>

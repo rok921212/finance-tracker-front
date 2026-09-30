@@ -42,7 +42,7 @@ const AdminLogin: React.FC = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-black flex items-center justify-center px-4">
       <div className="w-full max-w-md anim-in">
-        <div className="bg-white/10 backdrop-blur-md rounded-2xl p-8 border border-red-500/20 shadow-2xl">
+        <div className="bg-white/10 backdrop-blur-md rounded-2xl p-5 sm:p-8 border border-red-500/20 shadow-2xl">
           <div className="text-center mb-8">
             <div className="w-16 h-16 bg-gradient-to-r from-red-600 to-red-700 rounded-full mx-auto mb-4 flex items-center justify-center">
               <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">

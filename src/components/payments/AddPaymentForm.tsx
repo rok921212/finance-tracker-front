@@ -13,10 +13,11 @@ import {
   PaymentDetail,
   PaymentMethod,
   PAYMENT_METHODS,
+  paymentMethodLabel,
 } from "../../lib/paymentsApi";
 import { errorCode, errorMessage } from "../../lib/http";
 import { useDropTick } from "../../lib/cache";
-import { formatCents, formatDay, isValidAmount, toDayString } from "../../utils/money";
+import { formatDay, isValidAmount, toDayString } from "../../utils/money";
 import { compressCashoutProof, compressScreenshot } from "../../lib/compressImage";
 
 type Errors = Partial<
@@ -26,13 +27,20 @@ type Errors = Partial<
     | "loaded"
     | "redeemed"
     | "cashout"
+    | "cashoutProof"
     | "gameId"
+    | "customGame"
     | "paymentMethod"
     | "player"
+    | "gameUsername"
+    | "paymentTag"
     | "screenshot",
     string
   >
 >;
+
+/** Dropdown value for "Custom game": the name is typed in a box that appears below */
+const CUSTOM_GAME = "__custom__";
 
 /** 45050 -> "450.50" for prefilling inputs (no thousands separators). */
 const centsToInput = (cents: number) => `${Math.trunc(cents / 100)}.${String(cents % 100).padStart(2, "0")}`;
@@ -44,16 +52,21 @@ const AddPaymentForm: React.FC = () => {
   const isEdit = !!editId;
 
   const [games, setGames] = useState<GameOption[] | null>(null);
-  const [gamesError, setGamesError] = useState("");
   const [date, setDate] = useState(toDayString(new Date()));
   const [deposit, setDeposit] = useState("");
   const [loaded, setLoaded] = useState("");
-  const [redeemed, setRedeemed] = useState("");
+  // Nothing redeemed is the common case: starts at 0 (an emptied box is also saved as 0)
+  const [redeemed, setRedeemed] = useState("0");
   const [cashout, setCashout] = useState("");
   const [cashoutProof, setCashoutProof] = useState<File | null>(null);
+  const [gamesError, setGamesError] = useState("");
   const [gameId, setGameId] = useState("");
+  // Name typed after choosing "Custom game" in the dropdown
+  const [customGame, setCustomGame] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | "">("");
   const [player, setPlayer] = useState("");
+  const [gameUsername, setGameUsername] = useState("");
+  const [paymentTag, setPaymentTag] = useState("");
   const [file, setFile] = useState<File | null>(null);
   // Edit mode: the entry as it is now (current images, possibly-disabled game)
   const [original, setOriginal] = useState<PaymentDetail | null>(null);
@@ -74,7 +87,7 @@ const AddPaymentForm: React.FC = () => {
     if (cashoutProof) compressCashoutProof(cashoutProof);
   }, [cashoutProof]);
 
-  // Points left change as entries come in: refetched when the server pushes a change to the games.
+  // Active games for the dropdown: refetched when the server pushes a change to the games.
   // (The entry being edited is loaded once, so a change elsewhere never overwrites the form.)
   const gamesChanged = useDropTick("/games");
   useEffect(() => {
@@ -96,6 +109,8 @@ const AddPaymentForm: React.FC = () => {
         setGameId(p.gameId ? String(p.gameId) : "");
         setPaymentMethod(p.paymentMethod || "");
         setPlayer(p.player || "");
+        setGameUsername(p.gameUsername || "");
+        setPaymentTag(p.paymentTag || "");
       })
       .catch((e) => setLoadError(errorMessage(e, "Could not load this entry")));
   }, [editId]);
@@ -106,6 +121,9 @@ const AddPaymentForm: React.FC = () => {
     original && original.gameId && games && !games.some((g) => g.id === String(original.gameId))
       ? [...games, { id: String(original.gameId), name: `${original.game || "Unknown game"} (disabled)` }]
       : games;
+  const isCustomGame = gameId === CUSTOM_GAME;
+  // The cashout screenshot upload only appears once a cashout amount is entered
+  const hasCashout = parseFloat(cashout) > 0;
 
   const validate = (): boolean => {
     const next: Errors = {};
@@ -113,15 +131,19 @@ const AddPaymentForm: React.FC = () => {
     else if (date > toDayString(new Date(Date.now() + 86400000))) next.date = "Date cannot be in the future";
     if (!player.trim()) next.player = "Player is required";
     if (!paymentMethod) next.paymentMethod = "Select a payment method";
+    else if (!paymentTag.trim()) next.paymentTag = "Enter the tag the money was sent to";
     if (!deposit.trim()) next.deposit = "Deposit is required";
     else if (!isValidAmount(deposit)) next.deposit = "Enter a valid amount (up to 2 decimals)";
     if (!loaded.trim()) next.loaded = "Loaded is required";
     else if (!isValidAmount(loaded)) next.loaded = "Enter a valid amount (up to 2 decimals)";
-    if (!redeemed.trim()) next.redeemed = "Redeemed is required (enter 0 if nothing was redeemed)";
-    else if (!isValidAmount(redeemed)) next.redeemed = "Enter a valid amount (up to 2 decimals)";
-    // Optional: left empty means no cashout
+    if (redeemed.trim() && !isValidAmount(redeemed)) next.redeemed = "Enter a valid amount (up to 2 decimals)";
+    // Left empty means no cashout; a cashout needs its screenshot (a new one, or the one already attached)
     if (cashout.trim() && !isValidAmount(cashout)) next.cashout = "Enter a valid amount (up to 2 decimals)";
+    else if (hasCashout && !cashoutProof && !existingProof) next.cashoutProof = "Upload the cashout screenshot for this cashout";
     if (!gameId) next.gameId = "Select a game";
+    else if (isCustomGame && !customGame.trim()) next.customGame = "Enter the game name";
+    else if (isCustomGame && !/[a-z0-9]/i.test(customGame)) next.customGame = "Game name must contain letters or numbers";
+    else if (!gameUsername.trim()) next.gameUsername = "Enter the backend username used to load the points";
     setErrors(next);
     return Object.keys(next).length === 0;
   };
@@ -136,18 +158,22 @@ const AddPaymentForm: React.FC = () => {
     const form = new FormData();
     form.append("date", date);
     form.append("player", player.trim());
+    form.append("gameUsername", gameUsername.trim());
+    form.append("paymentTag", paymentTag.trim());
     form.append("paymentMethod", paymentMethod);
     form.append("deposit", deposit.trim());
     form.append("loaded", loaded.trim());
-    form.append("redeemed", redeemed.trim());
+    form.append("redeemed", redeemed.trim() || "0");
     if (cashout.trim()) form.append("cashout", cashout.trim());
-    form.append("gameId", gameId);
+    if (isCustomGame) form.append("customGame", customGame.trim());
+    else form.append("gameId", gameId);
     if (allowDuplicate) form.append("allowDuplicate", "true");
     // On edit, omitted files keep the entry's current images. Images are shrunk in the browser first
     // (already started when they were picked), so only a few hundred KB go over the network.
     const [shot, proof] = await Promise.all([
       file ? compressScreenshot(file) : null,
-      cashoutProof ? compressCashoutProof(cashoutProof) : null,
+      // A screenshot picked before the cashout amount was cleared is not sent
+      cashoutProof && hasCashout ? compressCashoutProof(cashoutProof) : null,
     ]);
     if (shot) form.append("screenshot", shot);
     if (proof) form.append("cashoutProof", proof);
@@ -245,25 +271,53 @@ const AddPaymentForm: React.FC = () => {
                   value={gameId}
                   onChange={(e) => setGameId(e.target.value)}
                   className={inputClass}
-                  disabled={disabled || !gameOptions?.length}
+                  // "Custom game" works even when the list could not be loaded
+                  disabled={disabled || (!gameOptions && !gamesError)}
                 >
-                  <option value="">
-                    {!gameOptions
-                      ? gamesError
-                        ? "Games unavailable"
-                        : "Loading games..."
-                      : gameOptions.length
-                        ? "Select a game"
-                        : "No games available"}
+                  <option value="" disabled hidden>
+                    {!gameOptions && !gamesError ? "Loading games..." : "Select a game"}
                   </option>
                   {gameOptions?.map((g) => (
                     <option key={g.id} value={g.id}>
                       {g.name}
-                      {g.remaining != null ? ` — ${formatCents(Math.max(0, g.remaining))} points left` : ""}
                     </option>
                   ))}
+                  <option value={CUSTOM_GAME}>Custom game…</option>
                 </select>
               </Field>
+              {isCustomGame && (
+                <div className="anim-fade">
+                  <Field label="Custom Game Name" error={errors.customGame} htmlFor="pay-custom-game">
+                    <input
+                      id="pay-custom-game"
+                      placeholder="Type the game name"
+                      value={customGame}
+                      maxLength={60}
+                      autoComplete="off"
+                      autoFocus
+                      onChange={(e) => setCustomGame(e.target.value)}
+                      className={inputClass}
+                      disabled={disabled}
+                    />
+                  </Field>
+                </div>
+              )}
+              {gameId && (
+                <div className="anim-fade">
+                  <Field label="Backend Username" error={errors.gameUsername} htmlFor="pay-game-username">
+                    <input
+                      id="pay-game-username"
+                      placeholder="Backend username used to load the points"
+                      value={gameUsername}
+                      maxLength={60}
+                      autoComplete="off"
+                      onChange={(e) => setGameUsername(e.target.value)}
+                      className={inputClass}
+                      disabled={disabled}
+                    />
+                  </Field>
+                </div>
+              )}
               <Field label="Player" error={errors.player} htmlFor="pay-player">
                 <input
                   id="pay-player"
@@ -284,7 +338,9 @@ const AddPaymentForm: React.FC = () => {
                   className={inputClass}
                   disabled={disabled}
                 >
-                  <option value="">Select a payment method</option>
+                  <option value="" disabled hidden>
+                    Select a payment method
+                  </option>
                   {PAYMENT_METHODS.map((m) => (
                     <option key={m.value} value={m.value}>
                       {m.label}
@@ -292,6 +348,22 @@ const AddPaymentForm: React.FC = () => {
                   ))}
                 </select>
               </Field>
+              {paymentMethod && (
+                <div className="anim-fade">
+                  <Field label={`${paymentMethodLabel(paymentMethod)} Tag`} error={errors.paymentTag} htmlFor="pay-tag">
+                    <input
+                      id="pay-tag"
+                      placeholder="Tag the money was sent to, e.g. $yourtag"
+                      value={paymentTag}
+                      maxLength={60}
+                      autoComplete="off"
+                      onChange={(e) => setPaymentTag(e.target.value)}
+                      className={inputClass}
+                      disabled={disabled}
+                    />
+                  </Field>
+                </div>
+              )}
               <Field label="Deposit" error={errors.deposit} htmlFor="pay-deposit">
                 <input
                   id="pay-deposit"
@@ -325,7 +397,12 @@ const AddPaymentForm: React.FC = () => {
                   disabled={disabled}
                 />
               </Field>
-              <Field label="Cashout (optional)" error={errors.cashout} htmlFor="pay-cashout">
+              <Field
+                label="Cashout"
+                hint="If there is a cashout, enter the amount and upload the cashout screenshot"
+                error={errors.cashout}
+                htmlFor="pay-cashout"
+              >
                 <input
                   id="pay-cashout"
                   inputMode="decimal"
@@ -364,7 +441,9 @@ const AddPaymentForm: React.FC = () => {
               />
             </Field>
 
-            <Field label="Cashout request screenshot from the player (required if there is a cashout)">
+            {hasCashout && (
+            <div className="anim-fade">
+            <Field label="Cashout request screenshot from the player (required)" error={errors.cashoutProof}>
               {existingProof && !cashoutProof && (
                 <p className="mb-2 text-xs text-gray-400">
                   A cashout screenshot is already attached (
@@ -376,14 +455,19 @@ const AddPaymentForm: React.FC = () => {
               )}
               <ScreenshotDropzone
                 file={cashoutProof}
-                onChange={setCashoutProof}
+                onChange={(f) => {
+                  setCashoutProof(f);
+                  setErrors((prev) => ({ ...prev, cashoutProof: undefined }));
+                }}
                 disabled={disabled}
                 maxBytes={MAX_CASHOUT_PROOF_BYTES}
                 prompt="Drop the player's cashout request screenshot here or click to browse"
-                hint="Required if there is a cashout · AVIF, JPG, PNG or WebP · max 10MB"
+                hint="Required for a cashout · AVIF, JPG, PNG or WebP · max 10MB"
                 tall
               />
               </Field>
+            </div>
+            )}
 
             {submitting && (
               <div>

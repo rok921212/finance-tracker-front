@@ -80,19 +80,30 @@ export const Spinner: React.FC<{ className?: string }> = ({ className = "h-4 w-4
   </svg>
 );
 
-export const inputClass =
-  "w-full bg-black/50 border border-gray-600 text-white px-3 py-2 rounded-lg focus:outline-none focus:border-red-500 placeholder-gray-500 disabled:opacity-60";
+/** Full-page loading state (lazy page chunks, auth check) */
+export const PageFallback: React.FC = () => (
+  <div className="min-h-screen bg-black flex items-center justify-center text-gray-300">
+    <Spinner className="h-8 w-8" />
+  </div>
+);
 
-export const Field: React.FC<{ label: string; error?: string; children: ReactNode; htmlFor?: string }> = ({
+// text-base on phones: iOS Safari zooms the page into any input under 16px.
+// min-w-0: date inputs otherwise keep a wide intrinsic size and overflow narrow grid cells.
+export const inputClass =
+  "w-full min-w-0 bg-black/50 border border-gray-600 text-white text-base md:text-sm px-3 py-2 rounded-lg focus:outline-none focus:border-red-500 placeholder-gray-500 disabled:opacity-60";
+
+export const Field: React.FC<{ label: string; error?: string; children: ReactNode; htmlFor?: string; hint?: ReactNode }> = ({
   label,
   error,
   children,
   htmlFor,
+  hint,
 }) => (
-  <div>
+  <div className="min-w-0">
     <label htmlFor={htmlFor} className="block text-red-400 text-sm font-medium mb-1 uppercase tracking-wide">
       {label}
     </label>
+    {hint && <p className="text-xs text-gray-400 mb-1">{hint}</p>}
     {children}
     {error && <p className="text-red-400 text-xs mt-1">{error}</p>}
   </div>

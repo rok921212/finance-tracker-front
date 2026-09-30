@@ -25,6 +25,26 @@ interface AuthContextType {
   logout: () => void;
 }
 
+// The last signed-in account, so a reload renders at once instead of waiting on /auth/me
+// (which can take a while on a cold server). The server still checks the token on every request.
+const USER_KEY = "user";
+const readSavedUser = (): User | null => {
+  try {
+    const raw = localStorage.getItem(USER_KEY);
+    return raw && localStorage.getItem("token") ? (JSON.parse(raw) as User) : null;
+  } catch {
+    return null;
+  }
+};
+const saveUser = (user: User | null) => {
+  try {
+    if (user) localStorage.setItem(USER_KEY, JSON.stringify(user));
+    else localStorage.removeItem(USER_KEY);
+  } catch {
+    // storage unavailable
+  }
+};
+
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 interface AuthProviderProps {
@@ -32,14 +52,17 @@ interface AuthProviderProps {
 }
 
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(readSavedUser);
   const [token, setToken] = useState<string | null>(localStorage.getItem("token"));
 
   // The signed-in account. Served from this tab's cache on reload (no request) and refetched only
   // when the server pushes a change to it, e.g. a role change.
   const me = useCachedGet<{ user: User }>(token ? "/auth/me" : null);
   useEffect(() => {
-    if (me.data) setUser(me.data.user);
+    if (me.data) {
+      setUser(me.data.user);
+      saveUser(me.data.user);
+    }
   }, [me.data]);
   useEffect(() => {
     // Invalid/expired token or deleted account (not a network hiccup): sign out
@@ -47,6 +70,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     if (status === 401 || status === 404) {
       clearCache();
       localStorage.removeItem("token");
+      saveUser(null);
       setToken(null);
       setUser(null);
     }
@@ -66,6 +90,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       stopLiveEvents(); // the next stream must carry the new account's token
       clearCache();
       localStorage.setItem("token", token);
+      saveUser(user);
       setToken(token);
       setUser(user);
       return { success: true, message: response.data.message };
@@ -90,6 +115,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     stopLiveEvents();
     clearCache(); // never show one account's cached data to the next
     localStorage.removeItem("token");
+    saveUser(null);
     setToken(null);
     setUser(null);
   };

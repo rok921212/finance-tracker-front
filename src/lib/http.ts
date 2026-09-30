@@ -1,6 +1,6 @@
 import axios, { AxiosError } from "axios";
 
-export const API_BASE_URL = "https://finance-tracker-backend-yuhn.onrender.com/api";
+export const API_BASE_URL = "http://localhost:3000/api";
 
 const http = axios.create({ baseURL: API_BASE_URL, timeout: 60000 });
 
@@ -18,6 +18,7 @@ http.interceptors.request.use((config) => {
 export const handleExpiredSession = () => {
   if (!localStorage.getItem("token")) return;
   localStorage.removeItem("token");
+  localStorage.removeItem("user");
   const loginPath = window.location.pathname.startsWith("/admin") ? "/admin/login" : "/login";
   if (window.location.pathname !== loginPath) window.location.assign(`${loginPath}?expired=1`);
 };

@@ -1,14 +1,10 @@
 import http from "./http";
-import { cachedGet, invalidateCached } from "./cache";
+import { cachedGet, invalidateCached, updateCached } from "./cache";
 import type { SyncToken } from "./deltaSync";
 
 export interface GameOption {
   id: string;
   name: string;
-  /** Points pool in cents; null = unlimited */
-  totalPoints?: number | null;
-  /** Points left in the pool in cents; null = unlimited */
-  remaining?: number | null;
 }
 
 export type PaymentMethod = "cashapp" | "venmo" | "paypal" | "zelle" | "applepay" | "chime";
@@ -38,6 +34,10 @@ export interface PaymentRow {
   paymentMethod: PaymentMethod | null;
   /** Name the player used to load points */
   player: string | null;
+  /** Game-backend username the points were loaded from; older entries have none */
+  gameUsername: string | null;
+  /** Tag of the account the money was sent to (e.g. $cashtag); older entries have none */
+  paymentTag: string | null;
   /** Last time the user edited the entry (none = never edited) */
   editedAt?: string;
   /** Admin view only: when the user deleted the entry on their side (it still exists for the admin) */
@@ -45,6 +45,9 @@ export interface PaymentRow {
   thumb: string | null;
   /** Thumbnail of the optional cashout screenshot */
   cashoutThumb?: string | null;
+  /** Full-size screenshot URLs (lists include them so a preview opens without another request) */
+  shot?: string | null;
+  cashoutShot?: string | null;
   user?: { id: string; username: string };
 }
 
@@ -125,14 +128,6 @@ export interface AdminGame {
   slug: string;
   active: boolean;
   sortOrder: number;
-  /** Points pool in cents; null = unlimited */
-  totalPoints: number | null;
-  /** Loaded amount of every entry for this game */
-  used: number;
-  /** Redeemed amount of every entry for this game; goes back into the pool */
-  redeemed: number;
-  /** totalPoints - used + redeemed */
-  remaining: number | null;
 }
 
 export interface AuditRow {
@@ -168,7 +163,8 @@ export const getActiveGames = () => cachedGet<GameOption[]>("/games");
  * After ANY payment write: drop every cached payment list/summary/detail (user and admin, in all
  * open tabs) so nothing stale is shown, and nudge open pages to delta-sync right away.
  */
-const paymentsChanged = () => invalidateCached("/payments", "/admin/", "/games");
+// (The games list doesn't depend on payments, so it is kept)
+const paymentsChanged = () => invalidateCached("/payments", "/admin/");
 
 export const createPayment = async (form: FormData, onProgress?: (pct: number) => void) => {
   const res = await http.post<{ message: string; payment: { id: string } }>("/payments", form, {
@@ -223,10 +219,24 @@ export const updatePayment = async (id: string, form: FormData, onProgress?: (pc
   return res.data;
 };
 
-/** Hides the entry from this user. The admin keeps it (flagged) and alone can delete it for good. */
-export const deleteMyPayment = async (id: string) => {
+/**
+ * Hides the entry from this user. The admin keeps it (flagged) and alone can delete it for good.
+ * `list`: the page on screen. When it holds every row (nothing to pull up from a next page), only
+ * the row is removed from its cached copy and just the totals/detail are refetched; otherwise every
+ * list is dropped so the page refills from the server.
+ */
+export const deleteMyPayment = async (id: string, list?: { params: Record<string, unknown>; complete: boolean }) => {
   const res = await http.delete<{ message: string; id: string }>(`/payments/${id}`);
-  paymentsChanged();
+  if (list?.complete) {
+    updateCached<Paged<PaymentRow>>("/payments", list.params, (d) => ({
+      ...d,
+      items: d.items.filter((x) => x.id !== id),
+      total: Math.max(0, d.total - (d.items.some((x) => x.id === id) ? 1 : 0)),
+    }));
+    invalidateCached("/payments/summary", `/payments/${id}`, "/admin/");
+  } else {
+    paymentsChanged();
+  }
   return res.data;
 };
 
@@ -300,7 +310,7 @@ export const adminCreateGame = async (name: string) => {
   gamesChanged();
   return g;
 };
-export const adminUpdateGame = async (id: string, patch: Partial<Pick<AdminGame, "name" | "active">> & { totalPoints?: string | null }) => {
+export const adminUpdateGame = async (id: string, patch: Partial<Pick<AdminGame, "name" | "active">>) => {
   const g = (await http.patch<AdminGame>(`/admin/games/${id}`, patch)).data;
   gamesChanged();
   return g;
@@ -316,9 +326,28 @@ export const adminAudit = (page: number) => cachedGet<Paged<AuditRow>>("/admin/a
 
 export type ExportFormat = "csv" | "pdf";
 
+/** Columns the admin can pick for exports (keys match the backend). csvOnly ones are left out of the PDF. */
+export const EXPORT_COLUMNS: { key: string; label: string; csvOnly?: boolean }[] = [
+  { key: "id", label: "Payment ID", csvOnly: true },
+  { key: "date", label: "Date" },
+  { key: "user", label: "User" },
+  { key: "player", label: "Player" },
+  { key: "game", label: "Game" },
+  { key: "gameUsername", label: "Backend Username" },
+  { key: "paymentMethod", label: "Payment Method" },
+  { key: "paymentTag", label: "Payment Tag" },
+  { key: "deposit", label: "Deposit" },
+  { key: "loaded", label: "Loaded" },
+  { key: "redeemed", label: "Redeemed" },
+  { key: "cashout", label: "Cashout" },
+  { key: "createdAt", label: "Created At", csvOnly: true },
+  { key: "editedAt", label: "Edited At", csvOnly: true },
+];
+
 /** Download the filtered export through the authenticated client so the token is never put in a URL. */
-export const downloadPaymentsExport = async (f: PaymentFilters, format: ExportFormat) => {
-  const res = await http.get(`/admin/payments/export.${format}`, { params: clean({ ...f }), responseType: "blob" });
+export const downloadPaymentsExport = async (f: PaymentFilters, format: ExportFormat, columns?: string[]) => {
+  const params = clean({ ...f, columns: columns?.join(",") });
+  const res = await http.get(`/admin/payments/export.${format}`, { params, responseType: "blob" });
   const url = URL.createObjectURL(res.data as Blob);
   const a = document.createElement("a");
   a.href = url;

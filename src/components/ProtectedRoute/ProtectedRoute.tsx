@@ -1,6 +1,7 @@
 import React, { ReactNode } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
+import { PageFallback } from "../ui/ui";
 
 interface ProtectedRouteProps {
   children: ReactNode;
@@ -9,13 +10,7 @@ interface ProtectedRouteProps {
 const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
   const { isAuthenticated, isLoading } = useAuth();
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-xl">Loading...</div>
-      </div>
-    );
-  }
+  if (isLoading) return <PageFallback />;
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;

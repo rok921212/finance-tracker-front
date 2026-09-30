@@ -9,7 +9,9 @@ const FIELD_LABELS: Record<string, string> = {
   date: "Date",
   game: "Game",
   player: "Player",
+  gameUsername: "Backend username",
   paymentMethod: "Payment method",
+  paymentTag: "Payment tag",
   deposit: "Deposit",
   loaded: "Loaded",
   redeemed: "Redeemed",
@@ -29,6 +31,8 @@ const formatValue = (field: string, v: EditChange["from"]): string => {
 };
 
 const ChangeLine: React.FC<{ c: EditChange }> = ({ c }) => {
+  // The account owner field was removed; older logs may still mention it
+  if (c.field === "accountOwner") return null;
   const label = FIELD_LABELS[c.field] || c.field;
   if (IMAGES.has(c.field)) {
     return (

@@ -1,21 +1,20 @@
-import React, { FormEvent, useCallback, useEffect, useState } from "react";
+import React, { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { Card, Button, Banner, Table, Th, Td, inputClass } from "../ui/ui";
-import { adminCreateGame, adminGames, adminMoveGame, adminUpdateGame, AdminGame } from "../../lib/paymentsApi";
+import { adminCreateGame, adminGames, adminMoveGame, adminUpdateGame, AdminGame, GameSummaryRow } from "../../lib/paymentsApi";
 import { errorMessage } from "../../lib/http";
-import { useDropTick } from "../../lib/cache";
+import { useCachedGet, useDropTick } from "../../lib/cache";
 import { formatCents } from "../../utils/money";
-
-// Cents -> plain input value ("1000", "250.5"); null (unlimited) -> ""
-const pointsInput = (cents: number | null) => (cents == null ? "" : String(cents / 100));
 
 const GamesTab: React.FC<{ onChanged: () => void }> = ({ onChanged }) => {
   const [games, setGames] = useState<AdminGame[] | null>(null);
   const [name, setName] = useState("");
   const [editing, setEditing] = useState<{ id: string; name: string } | null>(null);
-  // Unsaved Total Points input per game id
-  const [points, setPoints] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  // All-time loaded / redeemed per game; refetched by itself when payments change
+  const summary = useCachedGet<GameSummaryRow[]>("/admin/games/summary");
+  const totalsByGame = useMemo(() => new Map((summary.data || []).map((r) => [String(r.gameId), r])), [summary.data]);
 
   const load = useCallback(() => {
     adminGames()
@@ -79,9 +78,9 @@ const GamesTab: React.FC<{ onChanged: () => void }> = ({ onChanged }) => {
         </Button>
       </form>
       <p className="text-xs text-gray-500 mb-3">
-        Disabled games are hidden from new entries but stay attached to historical payments. Total Points is each
-        game's pool: every entry's Loaded amount is taken from it (rejected entries give it back). Leave it blank for
-        unlimited.
+        Disabled games are hidden from new entries but stay attached to historical payments. Loaded and Redeemed are
+        all-time totals across every entry for the game. Games users type with "Custom game" are added here as
+        disabled; enable one to offer it in everyone's dropdown.
       </p>
       {error && <div className="mb-3"><Banner>{error}</Banner></div>}
       <Table
@@ -91,125 +90,88 @@ const GamesTab: React.FC<{ onChanged: () => void }> = ({ onChanged }) => {
           <>
             <Th>Order</Th>
             <Th>Name</Th>
-            <Th>Total Points</Th>
-            <Th right>Used</Th>
-            <Th right>
-              <span title="Redeemed points go back into the pool: Remaining = Total - Used + Redeemed">Redeemed (returned)</span>
-            </Th>
-            <Th right>Remaining</Th>
+            <Th right>Entries</Th>
+            <Th right>Loaded</Th>
+            <Th right>Redeemed</Th>
             <Th>Status</Th>
             <Th right>Actions</Th>
           </>
         }
       >
-        {games?.map((g, i) => (
-          <tr key={g.id} className="hover:bg-white/5">
-            <Td>
-              <div className="flex gap-1">
-                <button
-                  className="px-2 rounded bg-gray-700/60 disabled:opacity-30"
-                  disabled={busy || i === 0}
-                  onClick={() => run(() => move(g.id, "up"), false)}
-                  aria-label={`Move ${g.name} up`}
-                >
-                  ↑
-                </button>
-                <button
-                  className="px-2 rounded bg-gray-700/60 disabled:opacity-30"
-                  disabled={busy || i === games.length - 1}
-                  onClick={() => run(() => move(g.id, "down"), false)}
-                  aria-label={`Move ${g.name} down`}
-                >
-                  ↓
-                </button>
-              </div>
-            </Td>
-            <Td className="text-white font-medium">
-              {editing?.id === g.id ? (
-                <form
-                  className="flex gap-2"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    run(async () => {
-                      upsert(await adminUpdateGame(g.id, { name: editing.name.trim() }));
-                      setEditing(null);
-                    }, false);
-                  }}
-                >
-                  <input className={inputClass} value={editing.name} maxLength={60} autoFocus onChange={(e) => setEditing({ id: g.id, name: e.target.value })} />
-                  <Button type="submit" className="px-3 py-1" loading={busy}>
-                    Save
+        {games?.map((g, i) => {
+          const t = totalsByGame.get(g.id);
+          return (
+            <tr key={g.id} className="hover:bg-white/5">
+              <Td>
+                <div className="flex gap-1">
+                  <button
+                    className="px-2 rounded bg-gray-700/60 disabled:opacity-30"
+                    disabled={busy || i === 0}
+                    onClick={() => run(() => move(g.id, "up"), false)}
+                    aria-label={`Move ${g.name} up`}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    className="px-2 rounded bg-gray-700/60 disabled:opacity-30"
+                    disabled={busy || i === games.length - 1}
+                    onClick={() => run(() => move(g.id, "down"), false)}
+                    aria-label={`Move ${g.name} down`}
+                  >
+                    ↓
+                  </button>
+                </div>
+              </Td>
+              <Td className="text-white font-medium">
+                {editing?.id === g.id ? (
+                  <form
+                    className="flex gap-2"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      run(async () => {
+                        upsert(await adminUpdateGame(g.id, { name: editing.name.trim() }));
+                        setEditing(null);
+                      }, false);
+                    }}
+                  >
+                    <input className={inputClass} value={editing.name} maxLength={60} autoFocus onChange={(e) => setEditing({ id: g.id, name: e.target.value })} />
+                    <Button type="submit" className="px-3 py-1" loading={busy}>
+                      Save
+                    </Button>
+                    <Button type="button" variant="ghost" className="px-3 py-1" onClick={() => setEditing(null)}>
+                      Cancel
+                    </Button>
+                  </form>
+                ) : (
+                  g.name
+                )}
+              </Td>
+              <Td right>{summary.data ? t?.count ?? 0 : "—"}</Td>
+              <Td right className="text-blue-300">{summary.data ? formatCents(t?.totalLoaded ?? 0) : "—"}</Td>
+              <Td right className="text-purple-300">{summary.data ? formatCents(t?.totalRedeemed ?? 0) : "—"}</Td>
+              <Td>
+                <span className={`text-xs px-2 py-0.5 rounded-full border ${g.active ? "border-green-500/40 text-green-300" : "border-gray-600 text-gray-400"}`}>
+                  {g.active ? "Active" : "Disabled"}
+                </span>
+              </Td>
+              <Td right>
+                <div className="flex gap-2 justify-end">
+                  <Button variant="ghost" className="px-3 py-1" disabled={busy} onClick={() => setEditing({ id: g.id, name: g.name })}>
+                    Rename
                   </Button>
-                  <Button type="button" variant="ghost" className="px-3 py-1" onClick={() => setEditing(null)}>
-                    Cancel
+                  <Button
+                    variant={g.active ? "danger" : "success"}
+                    className="px-3 py-1"
+                    disabled={busy}
+                    onClick={() => run(async () => upsert(await adminUpdateGame(g.id, { active: !g.active })), false)}
+                  >
+                    {g.active ? "Disable" : "Enable"}
                   </Button>
-                </form>
-              ) : (
-                g.name
-              )}
-            </Td>
-            <Td>
-              <form
-                className="flex gap-2"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  run(async () => {
-                    upsert(await adminUpdateGame(g.id, { totalPoints: (points[g.id] ?? "").trim() || null }));
-                    setPoints((p) => {
-                      const next = { ...p };
-                      delete next[g.id];
-                      return next;
-                    });
-                  }, false);
-                }}
-              >
-                <input
-                  className={`${inputClass} w-32`}
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  inputMode="decimal"
-                  placeholder="Unlimited"
-                  aria-label={`Total points for ${g.name}`}
-                  value={points[g.id] ?? pointsInput(g.totalPoints)}
-                  onChange={(e) => setPoints((p) => ({ ...p, [g.id]: e.target.value }))}
-                />
-                <Button
-                  type="submit"
-                  className="px-3 py-1"
-                  disabled={busy || points[g.id] === undefined || points[g.id] === pointsInput(g.totalPoints)}
-                >
-                  Save
-                </Button>
-              </form>
-            </Td>
-            <Td right>{formatCents(g.used)}</Td>
-            <Td right className="text-purple-300">{formatCents(g.redeemed ?? 0)}</Td>
-            <Td right className={`${g.remaining != null && g.remaining <= 0 ? "text-red-400" : "text-white"}`}>
-              {g.remaining == null ? "—" : formatCents(g.remaining)}
-            </Td>
-            <Td>
-              <span className={`text-xs px-2 py-0.5 rounded-full border ${g.active ? "border-green-500/40 text-green-300" : "border-gray-600 text-gray-400"}`}>
-                {g.active ? "Active" : "Disabled"}
-              </span>
-            </Td>
-            <Td right>
-              <div className="flex gap-2 justify-end">
-                <Button variant="ghost" className="px-3 py-1" disabled={busy} onClick={() => setEditing({ id: g.id, name: g.name })}>
-                  Rename
-                </Button>
-                <Button
-                  variant={g.active ? "danger" : "success"}
-                  className="px-3 py-1"
-                  disabled={busy}
-                  onClick={() => run(async () => upsert(await adminUpdateGame(g.id, { active: !g.active })), false)}
-                >
-                  {g.active ? "Disable" : "Enable"}
-                </Button>
-              </div>
-            </Td>
-          </tr>
-        ))}
+                </div>
+              </Td>
+            </tr>
+          );
+        })}
       </Table>
     </Card>
   );
