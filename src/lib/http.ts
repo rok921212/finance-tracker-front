@@ -1,6 +1,6 @@
 import axios, { AxiosError } from "axios";
 
-export const API_BASE_URL = "http://localhost:3000/api";
+export const API_BASE_URL = "https://finance-tracker-backend-yuhn.onrender.com/api";
 
 const http = axios.create({ baseURL: API_BASE_URL, timeout: 60000 });
 
