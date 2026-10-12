@@ -1,6 +1,11 @@
 import http from "./http";
-import { cachedGet, invalidateCached, updateCached } from "./cache";
+import { cachedGet, invalidateCached, peekCached, updateCached, CacheOptions } from "./cache";
 import type { SyncToken } from "./deltaSync";
+
+// Reads show any cached copy at once and refresh it in the background (see cachedGet `swr`)
+const SWR: CacheOptions = { swr: true };
+// Public pages have no live stream: trust a copy for a minute, then re-check it in the background
+const PUBLIC: CacheOptions = { swr: true, maxAge: 60 };
 
 export interface GameOption {
   id: string;
@@ -220,7 +225,7 @@ export const clean = (params: Record<string, unknown>) =>
 
 // All GETs go through the ETag cache: unchanged data costs a bodiless 304.
 // ---- user ----
-export const getActiveGames = () => cachedGet<GameOption[]>("/games");
+export const getActiveGames = () => cachedGet<GameOption[]>("/games", undefined, SWR);
 
 /**
  * After ANY payment write: drop every cached payment list/summary/detail (user and admin, in all
@@ -266,10 +271,10 @@ export const getMyPayments = (page: number, view?: MyListView) =>
 
 /** Totals; with a player, only that player's entries are counted. */
 export const getMySummary = (player?: string) =>
-  cachedGet<MySummary>("/payments/summary", player ? { player } : undefined);
+  cachedGet<MySummary>("/payments/summary", player ? { player } : undefined, SWR);
 
 /** Single entry including the full-size screenshot URL (list rows only carry a thumbnail). */
-export const getMyPayment = (id: string) => cachedGet<PaymentDetail>(`/payments/${id}`);
+export const getMyPayment = (id: string) => cachedGet<PaymentDetail>(`/payments/${id}`, undefined, SWR);
 
 /** Edit an own entry (the change is logged for the admin); omitting screenshot / cashoutProof keeps the current ones. */
 export const updatePayment = async (id: string, form: FormData, onProgress?: (pct: number) => void) => {
@@ -305,18 +310,18 @@ export const deleteMyPayment = async (id: string, list?: { params: Record<string
 
 // ---- admin ----
 export const adminSummary = (f: PaymentFilters) =>
-  cachedGet<AdminSummary>("/admin/summary", clean({ ...f }));
+  cachedGet<AdminSummary>("/admin/summary", clean({ ...f }), SWR);
 
 export const ADMIN_PAGE_SIZE = 50;
 export const adminPaymentsParams = (f: PaymentFilters, page: number) => clean({ ...f, page, limit: ADMIN_PAGE_SIZE });
 export const adminPayments = (f: PaymentFilters, page: number) =>
   cachedGet<Paged<PaymentRow>>("/admin/payments", adminPaymentsParams(f, page), { deltaPrefix: "payments" });
 
-export const adminPayment = (id: string) => cachedGet<PaymentDetail>(`/admin/payments/${id}`);
+export const adminPayment = (id: string) => cachedGet<PaymentDetail>(`/admin/payments/${id}`, undefined, SWR);
 
 /** Users' edit history (what changed, when), newest first; filter by user and/or entry. */
 export const adminEdits = (f: { userId?: string; paymentId?: string }, page: number) =>
-  cachedGet<Paged<EditRow>>("/admin/edits", clean({ ...f, page }));
+  cachedGet<Paged<EditRow>>("/admin/edits", clean({ ...f, page }), SWR);
 
 /** Permanent delete (admin only). */
 export const adminDeletePayment = async (id: string) => {
@@ -326,9 +331,9 @@ export const adminDeletePayment = async (id: string) => {
 };
 
 export const adminUsers = (search: string, page: number) =>
-  cachedGet<Paged<UserRow>>("/admin/users", clean({ search, page }));
+  cachedGet<Paged<UserRow>>("/admin/users", clean({ search, page }), SWR);
 
-export const adminUserSummary = (id: string) => cachedGet<UserRow>(`/admin/users/${id}/summary`);
+export const adminUserSummary = (id: string) => cachedGet<UserRow>(`/admin/users/${id}/summary`, undefined, SWR);
 
 // User writes change admin user lists/totals and the audit log
 const usersChanged = () => invalidateCached("/admin/");
@@ -362,9 +367,9 @@ export const adminDeleteUser = async (id: string, adminAuth?: string) => {
 };
 
 export const adminGamesSummary = (f: PaymentFilters) =>
-  cachedGet<GameSummaryRow[]>("/admin/games/summary", clean({ ...f }));
+  cachedGet<GameSummaryRow[]>("/admin/games/summary", clean({ ...f }), SWR);
 
-export const adminGames = () => cachedGet<AdminGame[]>("/admin/games");
+export const adminGames = () => cachedGet<AdminGame[]>("/admin/games", undefined, SWR);
 
 // Game writes: game names/order show up in the dropdown, every payment list, the admin summaries
 // and the public games page
@@ -398,7 +403,7 @@ export const adminRemoveGameImage = async (id: string) => {
 
 // ---- popup banner on the public games page ----
 const bannerChanged = () => invalidateCached("/admin/banner", "/public/banner");
-export const adminBanner = () => cachedGet<AdminBanner>("/admin/banner");
+export const adminBanner = () => cachedGet<AdminBanner>("/admin/banner", undefined, SWR);
 export const adminUploadBanner = async (file: File) => {
   const b = (await http.post<AdminBanner>("/admin/banner", imageForm(file))).data;
   bannerChanged();
@@ -417,7 +422,7 @@ export const adminDeleteBanner = async () => {
 
 // ---- payment tags (public /tags page) ----
 const tagsChanged = () => invalidateCached("/admin/tags", "/public/tags");
-export const adminTags = () => cachedGet<AdminTag[]>("/admin/tags");
+export const adminTags = () => cachedGet<AdminTag[]>("/admin/tags", undefined, SWR);
 /** Multipart: method, handle, name, note and an optional `qr` image. */
 export const adminCreateTag = async (form: FormData) => {
   const t = (await http.post<AdminTag>("/admin/tags", form)).data;
@@ -481,11 +486,11 @@ export interface AdminWheel {
 }
 
 const wheelChanged = () => invalidateCached("/admin/wheel", "/public/wheel");
-export const getPublicWheel = () => cachedGet<PublicWheel>("/public/wheel");
+export const getPublicWheel = () => cachedGet<PublicWheel>("/public/wheel", undefined, PUBLIC);
 /** The server picks where the wheel lands; the page only animates to it. */
 export const spinWheel = async () => (await http.post<WheelSpinResult>("/public/wheel/spin")).data;
 
-export const adminWheel = async () => (await http.get<AdminWheel>("/admin/wheel")).data;
+export const adminWheel = () => cachedGet<AdminWheel>("/admin/wheel", undefined, SWR);
 export const adminUpdateWheelConfig = async (patch: Partial<WheelConfig>) => {
   const c = (await http.put<WheelConfig>("/admin/wheel/config", patch)).data;
   wheelChanged();
@@ -519,9 +524,9 @@ export const adminMoveWheelSegment = async (id: string, direction: "up" | "down"
 };
 
 // ---- public (no login) ----
-export const getPublicGames = () => cachedGet<PublicGame[]>("/public/games");
-export const getPublicBanner = () => cachedGet<PublicBanner | null>("/public/banner");
-export const getPublicTags = () => cachedGet<PublicTag[]>("/public/tags");
+export const getPublicGames = () => cachedGet<PublicGame[]>("/public/games", undefined, PUBLIC);
+export const getPublicBanner = () => cachedGet<PublicBanner | null>("/public/banner", undefined, PUBLIC);
+export const getPublicTags = () => cachedGet<PublicTag[]>("/public/tags", undefined, PUBLIC);
 
 /** Returns only the games whose order changed, as [id, sortOrder] pairs. */
 export const adminMoveGame = async (id: string, direction: "up" | "down") => {
@@ -530,7 +535,23 @@ export const adminMoveGame = async (id: string, direction: "up" | "down") => {
   return res;
 };
 
-export const adminAudit = (page: number) => cachedGet<Paged<AuditRow>>("/admin/audit", { page });
+export const adminAudit = (page: number) => cachedGet<Paged<AuditRow>>("/admin/audit", { page }, SWR);
+
+// ---- cached copies, for a first render without a loading state (same URLs as the loaders above) ----
+export const peekAdminUsers = (search: string, page: number) => peekCached<Paged<UserRow>>("/admin/users", clean({ search, page }));
+export const peekAdminGames = () => peekCached<AdminGame[]>("/admin/games");
+export const peekAdminTags = () => peekCached<AdminTag[]>("/admin/tags");
+export const peekAdminWheel = () => peekCached<AdminWheel>("/admin/wheel");
+export const peekAdminBanner = () => peekCached<AdminBanner>("/admin/banner");
+export const peekAdminAudit = (page: number) => peekCached<Paged<AuditRow>>("/admin/audit", { page });
+export const peekAdminEdits = (f: { userId?: string; paymentId?: string }, page: number) =>
+  peekCached<Paged<EditRow>>("/admin/edits", clean({ ...f, page }));
+export const peekAdminPayment = (id: string) => peekCached<PaymentDetail>(`/admin/payments/${id}`);
+export const peekActiveGames = () => peekCached<GameOption[]>("/games");
+export const peekPublicGames = () => peekCached<PublicGame[]>("/public/games");
+export const peekPublicBanner = () => peekCached<PublicBanner | null>("/public/banner");
+export const peekPublicTags = () => peekCached<PublicTag[]>("/public/tags");
+export const peekPublicWheel = () => peekCached<PublicWheel>("/public/wheel");
 
 export type ExportFormat = "csv" | "pdf";
 

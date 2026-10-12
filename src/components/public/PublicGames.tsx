@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { getPublicBanner, getPublicGames, PublicBanner, PublicGame } from "../../lib/paymentsApi";
+import { getPublicBanner, getPublicGames, peekPublicBanner, peekPublicGames, PublicBanner, PublicGame } from "../../lib/paymentsApi";
+import { useDropTick } from "../../lib/cache";
 import { errorMessage } from "../../lib/http";
 import { Banner, Spinner } from "../ui/ui";
 
@@ -57,14 +58,19 @@ const GameTile: React.FC<{ game: PublicGame }> = ({ game }) => (
 );
 
 const PublicGames: React.FC = () => {
-  const [games, setGames] = useState<PublicGame[] | null>(null);
-  const [banner, setBanner] = useState<PublicBanner | null>(null);
+  const [games, setGames] = useState<PublicGame[] | null>(() => peekPublicGames() ?? null);
+  const [banner, setBanner] = useState<PublicBanner | null>(() => peekPublicBanner() ?? null);
   const [error, setError] = useState("");
 
+  // Shown from the cache at once; reloaded when a background check finds newer games
+  const gamesChanged = useDropTick("/public/games");
   useEffect(() => {
     getPublicGames()
       .then(setGames)
       .catch((e) => setError(errorMessage(e, "Could not load the games")));
+  }, [gamesChanged]);
+
+  useEffect(() => {
     // The page works without the banner, so a failure here is ignored
     getPublicBanner()
       .then(setBanner)

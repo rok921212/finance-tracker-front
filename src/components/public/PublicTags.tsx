@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { getPublicTags, PAYMENT_METHODS, PublicTag } from "../../lib/paymentsApi";
+import { getPublicTags, PAYMENT_METHODS, peekPublicTags, PublicTag } from "../../lib/paymentsApi";
+import { useDropTick } from "../../lib/cache";
 import { errorMessage } from "../../lib/http";
 import { Banner, Spinner } from "../ui/ui";
 
@@ -99,15 +100,17 @@ const TagCard: React.FC<{ tag: PublicTag; onView: () => void }> = ({ tag, onView
 );
 
 const PublicTags: React.FC = () => {
-  const [tags, setTags] = useState<PublicTag[] | null>(null);
+  const [tags, setTags] = useState<PublicTag[] | null>(() => peekPublicTags() ?? null);
   const [error, setError] = useState("");
   const [viewing, setViewing] = useState<PublicTag | null>(null);
 
+  // Shown from the cache at once; reloaded when a background check finds newer tags
+  const changed = useDropTick("/public/tags");
   useEffect(() => {
     getPublicTags()
       .then(setTags)
       .catch((e) => setError(errorMessage(e, "Could not load the tags")));
-  }, []);
+  }, [changed]);
 
   const groups = useMemo(
     () => PAYMENT_METHODS.map((m) => ({ ...m, tags: (tags || []).filter((t) => t.method === m.value) })).filter((g) => g.tags.length > 0),

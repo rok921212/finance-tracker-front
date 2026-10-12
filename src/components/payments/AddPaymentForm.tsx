@@ -8,6 +8,7 @@ import {
   createPayment,
   updatePayment,
   getActiveGames,
+  peekActiveGames,
   getMyPayment,
   GameOption,
   PaymentDetail,
@@ -55,7 +56,7 @@ const AddPaymentForm: React.FC = () => {
   const { id: editId } = useParams<{ id: string }>();
   const isEdit = !!editId;
 
-  const [games, setGames] = useState<GameOption[] | null>(null);
+  const [games, setGames] = useState<GameOption[] | null>(() => peekActiveGames() ?? null);
   const [date, setDate] = useState(toDayString(new Date()));
   const [deposit, setDeposit] = useState("");
   const [loaded, setLoaded] = useState("");

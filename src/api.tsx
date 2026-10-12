@@ -37,7 +37,7 @@ export interface ApiResponse<T> {
 
 // API functions
 // Served from the cache until the server pushes a change to this user's bookings
-export const fetchTeams = (): Promise<Team[]> => cachedGet<Team[]>("/bookingData");
+export const fetchTeams = (): Promise<Team[]> => cachedGet<Team[]>("/bookingData", undefined, { swr: true });
 
 /** Keep the cached team list in step with local delta updates. */
 export const updateCachedTeams = (fn: (teams: Team[]) => Team[]) => updateCached<Team[]>("/bookingData", undefined, fn);

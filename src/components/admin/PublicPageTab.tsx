@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Card, Button, Banner, Spinner, inputClass } from "../ui/ui";
 import ScreenshotDropzone, { validateScreenshot } from "../payments/ScreenshotDropzone";
-import { adminBanner, adminDeleteBanner, adminUpdateBanner, adminUploadBanner, AdminBanner } from "../../lib/paymentsApi";
+import { adminBanner, adminDeleteBanner, adminUpdateBanner, adminUploadBanner, AdminBanner, peekAdminBanner } from "../../lib/paymentsApi";
 import { errorMessage } from "../../lib/http";
 import { compressImage } from "../../lib/compressImage";
 
@@ -42,9 +42,9 @@ export const PublicLinkCard: React.FC<{ path: string; title: string; description
 };
 
 const BannerCard: React.FC = () => {
-  const [banner, setBanner] = useState<AdminBanner | null>(null);
+  const [banner, setBanner] = useState<AdminBanner | null>(() => peekAdminBanner() ?? null);
   const [file, setFile] = useState<File | null>(null);
-  const [link, setLink] = useState("");
+  const [link, setLink] = useState(() => peekAdminBanner()?.link ?? "");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ tone: "error" | "ok"; text: string } | null>(null);
 

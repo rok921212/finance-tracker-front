@@ -1,23 +1,56 @@
-import React, { Component, ReactNode, Suspense, lazy } from "react";
+import React, { Component, ReactNode, Suspense, lazy, useEffect } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import "./App.css";
 
-import { AuthProvider } from "./context/AuthContext";
+import { AuthProvider, useAuth } from "./context/AuthContext";
 import ProtectedRoute from "./components/ProtectedRoute/ProtectedRoute.tsx";
 import AdminRoute from "./components/ProtectedRoute/AdminRoute.tsx";
 import { PageFallback } from "./components/ui/ui";
+import { whenIdle } from "./lib/cache";
 
 // Each page is its own chunk: the first load only downloads the page being opened
-const Home = lazy(() => import("./components/home/home"));
-const Login = lazy(() => import("./components/Login/Login"));
-const MainPage = lazy(() => import("./components/mainpage/mainpage"));
-const PaymentsDashboard = lazy(() => import("./components/payments/PaymentsDashboard"));
-const AddPaymentForm = lazy(() => import("./components/payments/AddPaymentForm"));
-const AdminLogin = lazy(() => import("./components/admin/AdminLogin"));
-const AdminDashboard = lazy(() => import("./components/admin/AdminDashboard"));
-const PublicGames = lazy(() => import("./components/public/PublicGames"));
-const PublicTags = lazy(() => import("./components/public/PublicTags"));
-const PublicWheel = lazy(() => import("./components/public/PublicWheel"));
+const pages = {
+  home: () => import("./components/home/home"),
+  login: () => import("./components/Login/Login"),
+  main: () => import("./components/mainpage/mainpage"),
+  payments: () => import("./components/payments/PaymentsDashboard"),
+  addPayment: () => import("./components/payments/AddPaymentForm"),
+  adminLogin: () => import("./components/admin/AdminLogin"),
+  admin: () => import("./components/admin/AdminDashboard"),
+  publicGames: () => import("./components/public/PublicGames"),
+  publicTags: () => import("./components/public/PublicTags"),
+  publicWheel: () => import("./components/public/PublicWheel"),
+};
+const Home = lazy(pages.home);
+const Login = lazy(pages.login);
+const MainPage = lazy(pages.main);
+const PaymentsDashboard = lazy(pages.payments);
+const AddPaymentForm = lazy(pages.addPayment);
+const AdminLogin = lazy(pages.adminLogin);
+const AdminDashboard = lazy(pages.admin);
+const PublicGames = lazy(pages.publicGames);
+const PublicTags = lazy(pages.publicTags);
+const PublicWheel = lazy(pages.publicWheel);
+
+type PageName = keyof typeof pages;
+const PUBLIC_PAGES: PageName[] = ["publicGames", "publicTags", "publicWheel"];
+const USER_PAGES: PageName[] = ["payments", "addPayment", "home", "main"];
+
+/**
+ * Once the first page is on screen, download the code of the pages this visitor can open next, so
+ * navigating never waits on a chunk. (Webpack loads each chunk once; a later lazy() just reuses it.)
+ */
+function usePrefetchPages() {
+  const { isAuthenticated, isAdmin } = useAuth();
+  useEffect(() => {
+    const names: PageName[] = isAdmin
+      ? ["admin", ...USER_PAGES]
+      : isAuthenticated
+        ? USER_PAGES
+        : [...PUBLIC_PAGES, "login", "adminLogin"];
+    whenIdle(() => names.forEach((n) => pages[n]().catch(() => {})));
+  }, [isAuthenticated, isAdmin]);
+}
 
 const RELOADED_KEY = "chunk-reloaded";
 const isChunkError = (error: Error) =>
@@ -71,6 +104,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean
 }
 
 function AppContent() {
+  usePrefetchPages();
   return (
     <ErrorBoundary>
       <Suspense fallback={<PageFallback />}>

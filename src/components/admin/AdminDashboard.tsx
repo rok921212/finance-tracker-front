@@ -21,6 +21,14 @@ import {
   adminGames,
   adminPayments,
   adminUsers,
+  adminTags,
+  adminWheel,
+  adminBanner,
+  adminAudit,
+  adminGamesSummary,
+  peekAdminGames,
+  peekAdminUsers,
+  AdminGame,
   clean,
   downloadPaymentsExport,
   ExportFormat,
@@ -34,7 +42,7 @@ import {
   UserRow,
 } from "../../lib/paymentsApi";
 import { errorMessage } from "../../lib/http";
-import { peekCached, updateCached, useCachedGet, useDropTick } from "../../lib/cache";
+import { peekCached, updateCached, useCachedGet, useDropTick, whenIdle } from "../../lib/cache";
 import { mergeChanges, useDeltaSync, ChangedRow } from "../../lib/deltaSync";
 import { formatCents } from "../../utils/money";
 
@@ -49,6 +57,9 @@ const TABS: [Tab, string][] = [
   ["public", "Public Page"],
   ["audit", "Audit Log"],
 ];
+// Admin filter dropdown includes disabled games so historical data stays filterable
+const toFilterGames = (gs: AdminGame[]): GameOption[] => gs.map((g) => ({ id: g.id, name: g.active ? g.name : `${g.name} (disabled)` }));
+
 const FILTER_KEYS: (keyof PaymentFilters)[] = ["dateFrom", "dateTo", "gameId", "search", "paymentMethod", "player"];
 
 /** Filters live in the URL so views are shareable and survive reloads. */
@@ -305,7 +316,7 @@ const UsersTab: React.FC<{ onSelect: (id: string) => void }> = ({ onSelect }) =>
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
   const [page, setPage] = useState(1);
-  const [data, setData] = useState<Paged<UserRow> | null>(null);
+  const [data, setData] = useState<Paged<UserRow> | null>(() => peekAdminUsers("", 1) ?? null);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -363,7 +374,8 @@ const UsersTab: React.FC<{ onSelect: (id: string) => void }> = ({ onSelect }) =>
   // Refetch when the list's data changes (pushed), e.g. an entry or account elsewhere
   const changed = useDropTick("/admin/users", clean({ search: debounced, page }));
   useEffect(() => {
-    if (!changed) setData(null);
+    // A new search/page shows its cached copy (or a loader) instead of the previous page
+    if (!changed) setData(peekAdminUsers(debounced, page) ?? null);
     adminUsers(debounced, page)
       .then(setData)
       .catch((e) => setError(errorMessage(e, "Could not load users")));
@@ -575,20 +587,28 @@ const AdminDashboard: React.FC = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const { tab, userId, filters, update } = useUrlState();
-  const [games, setGames] = useState<GameOption[]>([]);
+  const [games, setGames] = useState<GameOption[]>(() => toFilterGames(peekAdminGames() || []));
   const [openId, setOpenId] = useState<string | null>(null);
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
   const [error, setError] = useState("");
 
-  // Admin filter dropdown includes disabled games so historical data stays filterable
   const loadGames = useCallback(() => {
     adminGames()
-      .then((gs) => setGames(gs.map((g) => ({ id: g.id, name: g.active ? g.name : `${g.name} (disabled)` }))))
+      .then((gs) => setGames(toFilterGames(gs)))
       .catch(() => {});
   }, []);
   // Refetched only when the server pushes a change to the games
   const gamesChanged = useDropTick("/admin/games");
   useEffect(loadGames, [loadGames, gamesChanged]);
+
+  // Load every other tab's data in the background once this one is on screen: the live stream keeps
+  // it current, so switching tabs later renders at once with no request
+  useEffect(() => {
+    whenIdle(() => {
+      const warm = [adminTags(), adminWheel(), adminBanner(), adminUsers("", 1), adminAudit(1), adminGamesSummary({})];
+      warm.forEach((p) => p.catch(() => {}));
+    });
+  }, []);
 
   const onExport = async (format: ExportFormat, columns: string[]) => {
     setExporting(format);

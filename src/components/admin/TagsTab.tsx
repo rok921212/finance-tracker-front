@@ -7,6 +7,7 @@ import {
   adminDeleteTag,
   adminMoveTag,
   adminTags,
+  peekAdminTags,
   adminUpdateTag,
   AdminTag,
   PAYMENT_METHODS,
@@ -97,7 +98,7 @@ const AddTagForm: React.FC<{ onCreated: (t: AdminTag) => void }> = ({ onCreated 
 };
 
 const TagsTab: React.FC = () => {
-  const [tags, setTags] = useState<AdminTag[] | null>(null);
+  const [tags, setTags] = useState<AdminTag[] | null>(() => peekAdminTags() ?? null);
   const [editing, setEditing] = useState<{ id: string; draft: Draft } | null>(null);
   const [deleting, setDeleting] = useState<AdminTag | null>(null);
   const [busy, setBusy] = useState(false);

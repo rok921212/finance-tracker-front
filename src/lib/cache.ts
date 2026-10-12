@@ -77,6 +77,8 @@ export const parseVersions = (header?: string | null): Versions | undefined => {
 
 // ---- Persistence (this tab only) ------------------------------------------------
 
+const isPublicKey = (key: string) => key.startsWith("/public/");
+
 // Identifies the signed-in session without storing the token itself
 const ownerOf = (token: string | null) => {
   if (!token) return "";
@@ -114,11 +116,9 @@ const restore = () => {
     if (!raw) return;
     const saved = JSON.parse(raw) as { owner: string; entries: [string, Entry][] };
     const owner = ownerOf(localStorage.getItem("token"));
-    if (!owner || saved.owner !== owner) {
-      sessionStorage.removeItem(STORAGE_KEY); // another session's data: never show it
-      return;
-    }
-    for (const [key, entry] of saved.entries) store.set(key, entry);
+    // Another session's data is never shown, except the no-login public pages, which are the same for everyone
+    const sameOwner = !!owner && saved.owner === owner;
+    for (const [key, entry] of saved.entries) if (sameOwner || isPublicKey(key)) store.set(key, entry);
   } catch {
     // corrupt or unavailable: start empty
   }
@@ -226,20 +226,67 @@ export interface CacheOptions {
    * `useDeltaSync` fetches only the changed rows instead and then marks the entry current.
    */
   deltaPrefix?: string;
+  /**
+   * Stale-while-revalidate: any cached copy is returned at once (never waiting on the network or
+   * the stream's startup), and checked in the background when it can't be trusted. If that check
+   * finds new data, views showing this URL are told to reload it (useDropTick / useCachedGet).
+   */
+  swr?: boolean;
 }
+
+// A copy fetched or confirmed this recently is not re-checked (also stops a reload loop after a background update)
+const SWR_RECHECK_MS = 5000;
+const revalidating = new Set<string>();
+
+const isFresh = (e: Entry, opts: CacheOptions) =>
+  (!!e.versions && live) || Date.now() - e.at < Math.max((opts.maxAge || 0) * 1000, opts.swr ? SWR_RECHECK_MS : 0);
+
+// Background check for an SWR copy; a changed body replaces it and notifies its views
+const revalidate = (key: string, url: string, params: Record<string, unknown> | undefined, opts: CacheOptions) => {
+  if (revalidating.has(key)) return;
+  revalidating.add(key);
+  const before = store.get(key);
+  whenLiveOrTimeout()
+    .then(async () => {
+      const now = store.get(key);
+      // Dropped or replaced meanwhile (its views were notified then), or the stream now vouches for it
+      if (!now || now !== before || isFresh(now, opts)) return;
+      await fetchFresh(key, url, params, opts).promise;
+      if (store.get(key) !== before) notify([key], {});
+    })
+    .catch(() => {
+      // offline: keep showing the cached copy
+    })
+    .finally(() => revalidating.delete(key));
+};
 
 export async function cachedGet<T>(url: string, params?: Record<string, unknown>, opts: CacheOptions = {}): Promise<T> {
   const key = keyOf(url, params);
+  if (opts.swr) {
+    const copy = store.get(key);
+    if (copy) {
+      if (!isFresh(copy, opts)) revalidate(key, url, params, opts);
+      return copy.data as T;
+    }
+  }
   if (!live && store.get(key)?.versions) await whenLiveOrTimeout();
 
   const cached = store.get(key);
   // Pushed versions keep this entry current: no request needed
-  if (cached && cached.versions && live) return cached.data as T;
-  if (cached && opts.maxAge && Date.now() - cached.at < opts.maxAge * 1000) return cached.data as T;
+  if (cached && isFresh(cached, { maxAge: opts.maxAge })) return cached.data as T;
 
+  const pending = fetchFresh(key, url, params, opts);
+  const data = await pending.promise;
+  // Invalidated mid-flight: the response may predate the write, so fetch again
+  return (pending.stale ? cachedGet<T>(url, params, opts) : data) as T;
+}
+
+// One network request for this URL (shared with any identical one already running)
+function fetchFresh(key: string, url: string, params: Record<string, unknown> | undefined, opts: CacheOptions): Pending {
   const existing = inFlight.get(key);
-  if (existing) return existing.promise as Promise<T>;
+  if (existing) return existing;
 
+  const cached = store.get(key);
   const pending: Pending = { promise: Promise.resolve(), stale: false };
   pending.promise = http
     .get(url, {
@@ -275,9 +322,7 @@ export async function cachedGet<T>(url: string, params?: Record<string, unknown>
     });
 
   inFlight.set(key, pending);
-  const data = await pending.promise;
-  // Invalidated mid-flight: the response may predate the write, so fetch again
-  return (pending.stale ? cachedGet<T>(url, params, opts) : data) as T;
+  return pending;
 }
 
 /** Last known body for a URL, for instant rendering while revalidating. */
@@ -421,7 +466,7 @@ export function useCachedGet<T>(url: string | null, params?: Record<string, unkn
     const peek = peekCached<T>(url, paramsRef.current);
     // Keep showing the previous data for this same query while it refetches
     setState((s) => ({ data: peek ?? (s.key === key ? s.data : undefined), loading: true, key }));
-    cachedGet<T>(url, paramsRef.current)
+    cachedGet<T>(url, paramsRef.current, { swr: true })
       .then((data) => !cancelled && setState({ data, loading: false, key }))
       .catch((error) => !cancelled && setState((s) => ({ ...s, error, loading: false })));
     return () => {
@@ -436,6 +481,13 @@ export function useCachedGet<T>(url: string | null, params?: Record<string, unkn
     reload: () => setTick((t) => t + 1),
   };
 }
+
+/** Run `fn` when the browser is idle (soon after the current page has rendered). */
+export const whenIdle = (fn: () => void) => {
+  const w = window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number };
+  if (w.requestIdleCallback) w.requestIdleCallback(fn, { timeout: 4000 });
+  else window.setTimeout(fn, 1500);
+};
 
 // ---- Own writes --------------------------------------------------------------
 

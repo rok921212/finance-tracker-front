@@ -3,6 +3,7 @@ import { Card, Button, Banner, Table, Th, Td, inputClass } from "../ui/ui";
 import {
   adminCreateGame,
   adminGames,
+  peekAdminGames,
   adminMoveGame,
   adminRemoveGameImage,
   adminUpdateGame,
@@ -17,7 +18,7 @@ import { compressImage } from "../../lib/compressImage";
 import { validateScreenshot } from "../payments/ScreenshotDropzone";
 
 const GamesTab: React.FC<{ onChanged: () => void }> = ({ onChanged }) => {
-  const [games, setGames] = useState<AdminGame[] | null>(null);
+  const [games, setGames] = useState<AdminGame[] | null>(() => peekAdminGames() ?? null);
   const [name, setName] = useState("");
   const [editing, setEditing] = useState<{ id: string; name: string } | null>(null);
   const [busy, setBusy] = useState(false);

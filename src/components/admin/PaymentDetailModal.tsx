@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Modal, Button, Banner, Spinner } from "../ui/ui";
-import { adminDeletePayment, adminPayment, PaymentDetail, paymentMethodLabel } from "../../lib/paymentsApi";
+import { adminDeletePayment, adminPayment, PaymentDetail, paymentMethodLabel, peekAdminPayment } from "../../lib/paymentsApi";
 import { errorMessage } from "../../lib/http";
 import { useDropTick } from "../../lib/cache";
 import { formatCents, formatDay } from "../../utils/money";
@@ -20,12 +20,12 @@ const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, ch
 );
 
 const PaymentDetailModal: React.FC<Props> = ({ paymentId, onClose, onDeleted }) => {
-  const [detail, setDetail] = useState<PaymentDetail | null>(null);
+  const [detail, setDetail] = useState<PaymentDetail | null>(() => (paymentId ? peekAdminPayment(paymentId) ?? null : null));
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    setDetail(null);
+    setDetail(paymentId ? peekAdminPayment(paymentId) ?? null : null);
     setError("");
   }, [paymentId]);
   // Refetched while open if the entry changes (pushed by the server)

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Card, Banner, Table, Th, Td, Pagination } from "../ui/ui";
-import { adminAudit, AuditRow, Paged } from "../../lib/paymentsApi";
+import { adminAudit, AuditRow, Paged, peekAdminAudit } from "../../lib/paymentsApi";
 import { errorMessage } from "../../lib/http";
 import { useDropTick } from "../../lib/cache";
 import { formatCents } from "../../utils/money";
@@ -52,12 +52,12 @@ const describe = (a: AuditRow): string => {
 
 const AuditTab: React.FC = () => {
   const [page, setPage] = useState(1);
-  const [data, setData] = useState<Paged<AuditRow> | null>(null);
+  const [data, setData] = useState<Paged<AuditRow> | null>(() => peekAdminAudit(1) ?? null);
   const [error, setError] = useState("");
 
-  // Refetch when the log changes (pushed by the server); a page change shows a loader meanwhile
+  // Refetch when the log changes (pushed by the server); a page change shows its cached copy or a loader
   const changed = useDropTick("/admin/audit", { page });
-  useEffect(() => setData(null), [page]);
+  useEffect(() => setData(peekAdminAudit(page) ?? null), [page]);
   useEffect(() => {
     adminAudit(page)
       .then(setData)

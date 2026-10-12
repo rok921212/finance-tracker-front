@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
-import { getPublicWheel, spinWheel, PublicWheel as Wheel, WheelSpinResult } from "../../lib/paymentsApi";
+import { getPublicWheel, peekPublicWheel, spinWheel, PublicWheel as Wheel, WheelSpinResult } from "../../lib/paymentsApi";
 import { errorCode, errorMessage } from "../../lib/http";
-import { invalidateCached } from "../../lib/cache";
+import { invalidateCached, useDropTick } from "../../lib/cache";
 import { Banner, Spinner } from "../ui/ui";
 import WheelSvg, { rotationFor } from "./WheelSvg";
 
@@ -35,7 +35,7 @@ const ResultViewer: React.FC<{ result: WheelSpinResult; onClose: () => void }> =
 };
 
 const PublicWheel: React.FC = () => {
-  const [wheel, setWheel] = useState<Wheel | null>(null);
+  const [wheel, setWheel] = useState<Wheel | null>(() => peekPublicWheel() ?? null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [spinning, setSpinning] = useState(false);
@@ -55,9 +55,24 @@ const PublicWheel: React.FC = () => {
         return null;
       });
 
+  // Shown from the cache at once; reloaded when the wheel changes, but never mid-spin
+  // (new segments would move the slice the wheel is turning to)
+  const changed = useDropTick("/public/wheel");
+  const spinningRef = useRef(false);
+  spinningRef.current = spinning;
+  const [reloadAfterSpin, setReloadAfterSpin] = useState(false);
   useEffect(() => {
-    load();
-  }, []);
+    if (spinningRef.current) setReloadAfterSpin(true);
+    else load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [changed]);
+  useEffect(() => {
+    if (!spinning && reloadAfterSpin) {
+      setReloadAfterSpin(false);
+      load();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spinning, reloadAfterSpin]);
 
   const spin = async () => {
     if (!wheel || spinning) return;

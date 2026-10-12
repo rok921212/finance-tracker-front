@@ -10,12 +10,14 @@ import {
   adminUpdateWheelConfig,
   adminUpdateWheelSegment,
   adminWheel,
+  peekAdminWheel,
   AdminWheel,
   AdminWheelSegment,
   WheelConfig,
 } from "../../lib/paymentsApi";
 import { errorMessage } from "../../lib/http";
 import { compressImage } from "../../lib/compressImage";
+import { useDropTick } from "../../lib/cache";
 
 export const PUBLIC_WHEEL_PATH = "/wheel";
 
@@ -255,7 +257,7 @@ const AddSegmentForm: React.FC<{ nextColor: string; disabled: boolean; onCreated
 };
 
 const WheelTab: React.FC = () => {
-  const [data, setData] = useState<AdminWheel | null>(null);
+  const [data, setData] = useState<AdminWheel | null>(() => peekAdminWheel() ?? null);
   const [editing, setEditing] = useState<{ id: string; draft: Draft } | null>(null);
   const [deleting, setDeleting] = useState<AdminWheelSegment | null>(null);
   const [busy, setBusy] = useState(false);
@@ -269,7 +271,9 @@ const WheelTab: React.FC = () => {
       .then(setData)
       .catch((e) => setError(errorMessage(e, "Could not load the wheel")));
   }, []);
-  useEffect(load, [load]);
+  // Refetched when the wheel changes or someone spins (pushed by the server)
+  const changed = useDropTick("/admin/wheel");
+  useEffect(load, [load, changed]);
 
   const segments = useMemo(() => (data ? [...data.segments].sort((a, b) => a.sortOrder - b.sortOrder) : []), [data]);
   const config = data?.config;

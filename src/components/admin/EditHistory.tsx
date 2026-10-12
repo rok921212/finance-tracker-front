@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Card, Banner, Table, Th, Td, Pagination, Spinner } from "../ui/ui";
-import { adminEdits, clean, EditChange, EditRow, Paged, paymentMethodLabel } from "../../lib/paymentsApi";
+import { adminEdits, clean, EditChange, EditRow, Paged, paymentMethodLabel, peekAdminEdits } from "../../lib/paymentsApi";
 import { errorMessage } from "../../lib/http";
 import { useDropTick } from "../../lib/cache";
 import { formatCents, formatDay } from "../../utils/money";
@@ -71,7 +71,7 @@ interface Props {
 /** Users' edits to their entries: what was changed, from what to what, and when. */
 const EditHistory: React.FC<Props> = ({ userId, paymentId, onOpen, compact }) => {
   const [page, setPage] = useState(1);
-  const [data, setData] = useState<Paged<EditRow> | null>(null);
+  const [data, setData] = useState<Paged<EditRow> | null>(() => peekAdminEdits({ userId, paymentId }, 1) ?? null);
   const [error, setError] = useState("");
 
   useEffect(() => setPage(1), [userId, paymentId]);
