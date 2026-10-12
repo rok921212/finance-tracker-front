@@ -49,7 +49,14 @@ const PaymentsTable: React.FC<Props> = ({ data, loading, onOpen, onPage, showUse
           >
             {showUser && <Td className="font-medium text-white">{p.user?.username || "—"}</Td>}
             <Td>{formatDay(p.date)}</Td>
-            <Td>{p.game || "—"}</Td>
+            <Td>
+              {p.game || "—"}
+              {p.notes && (
+                <span className="ml-1 text-gray-400" title={p.notes} aria-label="Has notes">
+                  ✎
+                </span>
+              )}
+            </Td>
             <Td>{p.player || "—"}</Td>
             <Td>{p.gameUsername || "—"}</Td>
             <Td>{paymentMethodLabel(p.paymentMethod)}</Td>
@@ -63,7 +70,10 @@ const PaymentsTable: React.FC<Props> = ({ data, loading, onOpen, onPage, showUse
                   {p.cashoutThumb && (
                     <img src={p.cashoutThumb} alt="Cashout screenshot" loading="lazy" className="w-8 h-8 rounded object-cover border border-yellow-500/40" />
                   )}
-                  {formatCents(p.cashout || 0)}
+                  <span>
+                    {formatCents(p.cashout || 0)}
+                    {p.cashoutMethod && <span className="block text-xs text-gray-400">{paymentMethodLabel(p.cashoutMethod)}</span>}
+                  </span>
                 </span>
               ) : (
                 "—"

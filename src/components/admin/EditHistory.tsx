@@ -16,6 +16,8 @@ const FIELD_LABELS: Record<string, string> = {
   loaded: "Loaded",
   redeemed: "Redeemed",
   cashout: "Cashout",
+  cashoutMethod: "Cashout method",
+  notes: "Notes",
   screenshot: "Screenshot",
   cashoutProof: "Cashout screenshot",
 };
@@ -26,7 +28,7 @@ const formatValue = (field: string, v: EditChange["from"]): string => {
   if (v === null || v === undefined || v === "") return "—";
   if (MONEY.has(field) && typeof v === "number") return formatCents(v);
   if (field === "date") return formatDay(String(v));
-  if (field === "paymentMethod") return paymentMethodLabel(String(v));
+  if (field === "paymentMethod" || field === "cashoutMethod") return paymentMethodLabel(String(v));
   return String(v);
 };
 

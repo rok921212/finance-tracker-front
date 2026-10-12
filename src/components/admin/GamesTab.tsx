@@ -1,9 +1,20 @@
-import React, { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Card, Button, Banner, Table, Th, Td, inputClass } from "../ui/ui";
-import { adminCreateGame, adminGames, adminMoveGame, adminUpdateGame, AdminGame, GameSummaryRow } from "../../lib/paymentsApi";
+import {
+  adminCreateGame,
+  adminGames,
+  adminMoveGame,
+  adminRemoveGameImage,
+  adminUpdateGame,
+  adminUploadGameImage,
+  AdminGame,
+  GameSummaryRow,
+} from "../../lib/paymentsApi";
 import { errorMessage } from "../../lib/http";
 import { useCachedGet, useDropTick } from "../../lib/cache";
 import { formatCents } from "../../utils/money";
+import { compressImage } from "../../lib/compressImage";
+import { validateScreenshot } from "../payments/ScreenshotDropzone";
 
 const GamesTab: React.FC<{ onChanged: () => void }> = ({ onChanged }) => {
   const [games, setGames] = useState<AdminGame[] | null>(null);
@@ -11,6 +22,9 @@ const GamesTab: React.FC<{ onChanged: () => void }> = ({ onChanged }) => {
   const [editing, setEditing] = useState<{ id: string; name: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // One hidden file input shared by every row; imageFor is the game it is picking for
+  const fileRef = useRef<HTMLInputElement>(null);
+  const imageFor = useRef<string | null>(null);
 
   // All-time loaded / redeemed per game; refetched by itself when payments change
   const summary = useCachedGet<GameSummaryRow[]>("/admin/games/summary");
@@ -60,6 +74,21 @@ const GamesTab: React.FC<{ onChanged: () => void }> = ({ onChanged }) => {
       return i >= 0 ? prev.map((x) => (x.id === g.id ? g : x)) : [...prev, g];
     });
 
+  const pickImage = (id: string) => {
+    imageFor.current = id;
+    fileRef.current?.click();
+  };
+
+  const onImagePicked = (file: File | undefined) => {
+    const id = imageFor.current;
+    if (fileRef.current) fileRef.current.value = ""; // picking the same file again still fires
+    if (!file || !id) return;
+    const invalid = validateScreenshot(file);
+    if (invalid) return setError(invalid);
+    // The server crops to 600x600; shrinking first just makes the upload faster
+    run(async () => upsert(await adminUploadGameImage(id, await compressImage(file, { maxWidth: 1200, maxHeight: 1200 }))), false);
+  };
+
   const onAdd = (e: FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
@@ -77,10 +106,18 @@ const GamesTab: React.FC<{ onChanged: () => void }> = ({ onChanged }) => {
           Add Game
         </Button>
       </form>
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".avif,image/avif,image/jpeg,image/png,image/webp"
+        className="hidden"
+        onChange={(e) => onImagePicked(e.target.files?.[0])}
+      />
       <p className="text-xs text-gray-500 mb-3">
         Disabled games are hidden from new entries but stay attached to historical payments. Loaded and Redeemed are
         all-time totals across every entry for the game. Games users type with "Custom game" are added here as
-        disabled; enable one to offer it in everyone's dropdown.
+        disabled; enable one to offer it in everyone's dropdown. Game images are shown on the public games page and
+        are cropped to 600×600 automatically.
       </p>
       {error && <div className="mb-3"><Banner>{error}</Banner></div>}
       <Table
@@ -89,6 +126,7 @@ const GamesTab: React.FC<{ onChanged: () => void }> = ({ onChanged }) => {
         head={
           <>
             <Th>Order</Th>
+            <Th>Image</Th>
             <Th>Name</Th>
             <Th right>Entries</Th>
             <Th right>Loaded</Th>
@@ -121,6 +159,22 @@ const GamesTab: React.FC<{ onChanged: () => void }> = ({ onChanged }) => {
                     ↓
                   </button>
                 </div>
+              </Td>
+              <Td>
+                <button
+                  type="button"
+                  className="block w-12 h-12 rounded-lg overflow-hidden border border-gray-700 bg-gray-800/60 hover:border-red-500/60 disabled:opacity-50"
+                  disabled={busy}
+                  onClick={() => pickImage(g.id)}
+                  title={g.imageUrl ? "Replace image" : "Upload image"}
+                  aria-label={`${g.imageUrl ? "Replace" : "Upload"} image for ${g.name}`}
+                >
+                  {g.imageUrl ? (
+                    <img src={g.imageUrl} alt="" className="w-full h-full object-cover" loading="lazy" />
+                  ) : (
+                    <span className="text-gray-500 text-xl leading-none">+</span>
+                  )}
+                </button>
               </Td>
               <Td className="text-white font-medium">
                 {editing?.id === g.id ? (
@@ -156,6 +210,19 @@ const GamesTab: React.FC<{ onChanged: () => void }> = ({ onChanged }) => {
               </Td>
               <Td right>
                 <div className="flex gap-2 justify-end">
+                  <Button variant="ghost" className="px-3 py-1 whitespace-nowrap" disabled={busy} onClick={() => pickImage(g.id)}>
+                    {g.imageUrl ? "Replace image" : "Upload image"}
+                  </Button>
+                  {g.imageUrl && (
+                    <Button
+                      variant="ghost"
+                      className="px-3 py-1 whitespace-nowrap"
+                      disabled={busy}
+                      onClick={() => run(async () => upsert(await adminRemoveGameImage(g.id)), false)}
+                    >
+                      Remove image
+                    </Button>
+                  )}
                   <Button variant="ghost" className="px-3 py-1" disabled={busy} onClick={() => setEditing({ id: g.id, name: g.name })}>
                     Rename
                   </Button>

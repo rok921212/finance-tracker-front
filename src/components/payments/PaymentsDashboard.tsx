@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import AppHeader from "./AppHeader";
-import { Page, Card, StatCard, Banner, Pagination, Spinner, inputClass } from "../ui/ui";
+import SummaryCards from "./SummaryCards";
+import { Page, Card, Banner, Pagination, Spinner, inputClass } from "../ui/ui";
 import ImageViewer from "../ui/ImageViewer";
 import {
   deleteMyPayment,
@@ -224,21 +225,7 @@ const PaymentsDashboard: React.FC = () => {
         {error && <Banner>{error}</Banner>}
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 items-start">
-          <StatCard label="Total Deposit" tone="green" value={summary ? formatCents(summary.totalDeposit) : "—"} />
-          <StatCard label="Total Loaded" tone="blue" value={summary ? formatCents(summary.totalLoaded) : "—"} />
-          <StatCard label="Total Redeemed" tone="purple" value={summary ? formatCents(summary.totalRedeemed || 0) : "—"}>
-            {!!summary?.redeemedByGame?.length && (
-              <ul className="mt-3 pt-3 border-t border-purple-500/20 space-y-1 text-sm max-h-40 overflow-y-auto">
-                {summary.redeemedByGame.map((g) => (
-                  <li key={g.gameId} className="flex justify-between gap-2">
-                    <span className="text-gray-300 truncate">{g.game || "Unknown game"}</span>
-                    <span className="text-white tabular-nums">{formatCents(g.redeemed)}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </StatCard>
-          <StatCard label="Total Cashout" tone="yellow" value={summary ? formatCents(summary.totalCashout || 0) : "—"} />
+          <SummaryCards summary={summary} />
         </div>
 
         <Card
@@ -386,6 +373,9 @@ const PaymentsDashboard: React.FC = () => {
                       <dt className="text-xs uppercase tracking-wider text-gray-500">Cashout</dt>
                       <dd className="text-yellow-400 font-medium tabular-nums break-all">
                         {formatCents(p.cashout || 0)}
+                        {!!p.cashout && p.cashoutMethod && (
+                          <span className="block text-xs text-gray-400 font-normal">via {paymentMethodLabel(p.cashoutMethod)}</span>
+                        )}
                         {p.cashoutThumb && (
                           <button
                             type="button"
@@ -410,6 +400,12 @@ const PaymentsDashboard: React.FC = () => {
                       </dd>
                     </div>
                   </dl>
+                  {p.notes && (
+                    <p className="mt-3 pt-3 border-t border-gray-700/60 text-sm text-gray-300 whitespace-pre-wrap break-words">
+                      <span className="text-xs uppercase tracking-wider text-gray-500 block mb-0.5">Notes</span>
+                      {p.notes}
+                    </p>
+                  )}
                 </li>
               ))}
             </ul>

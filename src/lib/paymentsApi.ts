@@ -32,6 +32,10 @@ export interface PaymentRow {
   cashout: number;
   /** Older entries have none */
   paymentMethod: PaymentMethod | null;
+  /** Method the cashout was paid out with; null when there is no cashout (or on older entries) */
+  cashoutMethod: PaymentMethod | null;
+  /** Optional free-text notes about the entry */
+  notes: string | null;
   /** Name the player used to load points */
   player: string | null;
   /** Game-backend username the points were loaded from; older entries have none */
@@ -98,14 +102,32 @@ export interface Totals {
   edited: number;
 }
 
-export interface MySummary {
+export interface GameAmount {
+  gameId: string;
+  game: string | null;
+  amount: number; // cents
+}
+
+export interface MethodAmount {
+  /** null for older entries saved without a payment method */
+  method: PaymentMethod | null;
+  amount: number; // cents
+}
+
+/** Card totals with their breakdowns (highest first); each breakdown sums to its total */
+export interface SummaryBreakdowns {
   totalDeposit: number;
   totalLoaded: number;
   totalRedeemed: number;
   totalCashout: number;
-  /** Total redeemed per game, highest first */
-  redeemedByGame: { gameId: string; game: string | null; redeemed: number }[];
+  depositByMethod: MethodAmount[];
+  loadedByGame: GameAmount[];
+  redeemedByGame: GameAmount[];
+  cashoutByMethod: MethodAmount[];
 }
+
+export type MySummary = SummaryBreakdowns;
+export type AdminSummary = Totals & SummaryBreakdowns & { totalUsers: number };
 
 export type Role = "user" | "admin";
 
@@ -128,6 +150,47 @@ export interface AdminGame {
   slug: string;
   active: boolean;
   sortOrder: number;
+  /** 600x600 tile for the public games page */
+  imageUrl?: string | null;
+}
+
+export interface PublicGame {
+  id: string;
+  name: string;
+  imageUrl: string | null;
+}
+
+export interface PublicBanner {
+  imageUrl: string;
+  link: string;
+}
+
+export interface AdminTag {
+  id: string;
+  method: PaymentMethod;
+  handle: string;
+  name: string;
+  note: string;
+  active: boolean;
+  sortOrder: number;
+  qrUrl: string | null;
+}
+
+export interface PublicTag {
+  id: string;
+  method: PaymentMethod;
+  handle: string;
+  name: string;
+  note: string;
+  qrUrl: string | null;
+  /** Same QR served as a file download */
+  qrDownloadUrl: string | null;
+}
+
+export interface AdminBanner {
+  imageUrl: string | null;
+  enabled: boolean;
+  link: string;
 }
 
 export interface AuditRow {
@@ -242,7 +305,7 @@ export const deleteMyPayment = async (id: string, list?: { params: Record<string
 
 // ---- admin ----
 export const adminSummary = (f: PaymentFilters) =>
-  cachedGet<Totals & { totalUsers: number }>("/admin/summary", clean({ ...f }));
+  cachedGet<AdminSummary>("/admin/summary", clean({ ...f }));
 
 export const ADMIN_PAGE_SIZE = 50;
 export const adminPaymentsParams = (f: PaymentFilters, page: number) => clean({ ...f, page, limit: ADMIN_PAGE_SIZE });
@@ -303,8 +366,9 @@ export const adminGamesSummary = (f: PaymentFilters) =>
 
 export const adminGames = () => cachedGet<AdminGame[]>("/admin/games");
 
-// Game writes: game names/order show up in the dropdown, every payment list and the admin summaries
-const gamesChanged = () => invalidateCached("/games", "/payments", "/admin/");
+// Game writes: game names/order show up in the dropdown, every payment list, the admin summaries
+// and the public games page
+const gamesChanged = () => invalidateCached("/games", "/payments", "/admin/", "/public/games");
 export const adminCreateGame = async (name: string) => {
   const g = (await http.post<AdminGame>("/admin/games", { name })).data;
   gamesChanged();
@@ -315,6 +379,74 @@ export const adminUpdateGame = async (id: string, patch: Partial<Pick<AdminGame,
   gamesChanged();
   return g;
 };
+const imageForm = (file: File) => {
+  const form = new FormData();
+  form.append("image", file);
+  return form;
+};
+/** Any image: the server crops it to 600x600. */
+export const adminUploadGameImage = async (id: string, file: File) => {
+  const g = (await http.post<AdminGame>(`/admin/games/${id}/image`, imageForm(file))).data;
+  gamesChanged();
+  return g;
+};
+export const adminRemoveGameImage = async (id: string) => {
+  const g = (await http.delete<AdminGame>(`/admin/games/${id}/image`)).data;
+  gamesChanged();
+  return g;
+};
+
+// ---- popup banner on the public games page ----
+const bannerChanged = () => invalidateCached("/admin/banner", "/public/banner");
+export const adminBanner = () => cachedGet<AdminBanner>("/admin/banner");
+export const adminUploadBanner = async (file: File) => {
+  const b = (await http.post<AdminBanner>("/admin/banner", imageForm(file))).data;
+  bannerChanged();
+  return b;
+};
+export const adminUpdateBanner = async (patch: Partial<Pick<AdminBanner, "enabled" | "link">>) => {
+  const b = (await http.patch<AdminBanner>("/admin/banner", patch)).data;
+  bannerChanged();
+  return b;
+};
+export const adminDeleteBanner = async () => {
+  const b = (await http.delete<AdminBanner>("/admin/banner")).data;
+  bannerChanged();
+  return b;
+};
+
+// ---- payment tags (public /tags page) ----
+const tagsChanged = () => invalidateCached("/admin/tags", "/public/tags");
+export const adminTags = () => cachedGet<AdminTag[]>("/admin/tags");
+/** Multipart: method, handle, name, note and an optional `qr` image. */
+export const adminCreateTag = async (form: FormData) => {
+  const t = (await http.post<AdminTag>("/admin/tags", form)).data;
+  tagsChanged();
+  return t;
+};
+/** JSON patch, or multipart when replacing the QR (`qr` file) or removing it (removeQr=true). */
+export const adminUpdateTag = async (id: string, patch: FormData | Partial<Pick<AdminTag, "method" | "handle" | "name" | "note" | "active">>) => {
+  const t = (await http.patch<AdminTag>(`/admin/tags/${id}`, patch)).data;
+  tagsChanged();
+  return t;
+};
+export const adminDeleteTag = async (id: string) => {
+  const res = (await http.delete<{ id: string }>(`/admin/tags/${id}`)).data;
+  tagsChanged();
+  return res;
+};
+/** Returns only the tags whose order changed, as [id, sortOrder] pairs. */
+export const adminMoveTag = async (id: string, direction: "up" | "down") => {
+  const res = (await http.post<{ changed: [string, number][] }>(`/admin/tags/${id}/move`, { direction })).data;
+  tagsChanged();
+  return res;
+};
+
+// ---- public (no login) ----
+export const getPublicGames = () => cachedGet<PublicGame[]>("/public/games");
+export const getPublicBanner = () => cachedGet<PublicBanner | null>("/public/banner");
+export const getPublicTags = () => cachedGet<PublicTag[]>("/public/tags");
+
 /** Returns only the games whose order changed, as [id, sortOrder] pairs. */
 export const adminMoveGame = async (id: string, direction: "up" | "down") => {
   const res = (await http.post<{ changed: [string, number][] }>(`/admin/games/${id}/move`, { direction })).data;
@@ -340,6 +472,8 @@ export const EXPORT_COLUMNS: { key: string; label: string; csvOnly?: boolean }[]
   { key: "loaded", label: "Loaded" },
   { key: "redeemed", label: "Redeemed" },
   { key: "cashout", label: "Cashout" },
+  { key: "cashoutMethod", label: "Cashout Method" },
+  { key: "notes", label: "Notes", csvOnly: true },
   { key: "createdAt", label: "Created At", csvOnly: true },
   { key: "editedAt", label: "Edited At", csvOnly: true },
 ];

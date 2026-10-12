@@ -85,6 +85,10 @@ const PaymentDetailModal: React.FC<Props> = ({ paymentId, onClose, onDeleted }) 
             <Row label="Loaded">{formatCents(detail.loaded)}</Row>
             <Row label="Redeemed">{formatCents(detail.redeemed || 0)}</Row>
             <Row label="Cashout">{formatCents(detail.cashout || 0)}</Row>
+            {!!detail.cashout && <Row label="Cashout method">{paymentMethodLabel(detail.cashoutMethod)}</Row>}
+            <Row label="Notes">
+              {detail.notes ? <span className="whitespace-pre-wrap break-words">{detail.notes}</span> : "—"}
+            </Row>
             <Row label="Created at">{new Date(detail.createdAt).toLocaleString()}</Row>
             <Row label="Last edited">{detail.editedAt ? new Date(detail.editedAt).toLocaleString() : "Never"}</Row>
             {!!detail.sameScreenshot?.length && (

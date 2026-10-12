@@ -28,6 +28,8 @@ type Errors = Partial<
     | "redeemed"
     | "cashout"
     | "cashoutProof"
+    | "cashoutMethod"
+    | "notes"
     | "gameId"
     | "customGame"
     | "paymentMethod"
@@ -38,6 +40,8 @@ type Errors = Partial<
     string
   >
 >;
+
+const MAX_NOTES = 500;
 
 /** Dropdown value for "Custom game": the name is typed in a box that appears below */
 const CUSTOM_GAME = "__custom__";
@@ -59,6 +63,8 @@ const AddPaymentForm: React.FC = () => {
   const [redeemed, setRedeemed] = useState("0");
   const [cashout, setCashout] = useState("");
   const [cashoutProof, setCashoutProof] = useState<File | null>(null);
+  const [cashoutMethod, setCashoutMethod] = useState<PaymentMethod | "">("");
+  const [notes, setNotes] = useState("");
   const [gamesError, setGamesError] = useState("");
   const [gameId, setGameId] = useState("");
   // Name typed after choosing "Custom game" in the dropdown
@@ -111,6 +117,8 @@ const AddPaymentForm: React.FC = () => {
         setPlayer(p.player || "");
         setGameUsername(p.gameUsername || "");
         setPaymentTag(p.paymentTag || "");
+        setCashoutMethod(p.cashoutMethod || "");
+        setNotes(p.notes || "");
       })
       .catch((e) => setLoadError(errorMessage(e, "Could not load this entry")));
   }, [editId]);
@@ -139,7 +147,9 @@ const AddPaymentForm: React.FC = () => {
     if (redeemed.trim() && !isValidAmount(redeemed)) next.redeemed = "Enter a valid amount (up to 2 decimals)";
     // Left empty means no cashout; a cashout needs its screenshot (a new one, or the one already attached)
     if (cashout.trim() && !isValidAmount(cashout)) next.cashout = "Enter a valid amount (up to 2 decimals)";
+    else if (hasCashout && !cashoutMethod) next.cashoutMethod = "Select how the cashout was paid";
     else if (hasCashout && !cashoutProof && !existingProof) next.cashoutProof = "Upload the cashout screenshot for this cashout";
+    if (notes.trim().length > MAX_NOTES) next.notes = `Notes must be at most ${MAX_NOTES} characters`;
     if (!gameId) next.gameId = "Select a game";
     else if (isCustomGame && !customGame.trim()) next.customGame = "Enter the game name";
     else if (isCustomGame && !/[a-z0-9]/i.test(customGame)) next.customGame = "Game name must contain letters or numbers";
@@ -165,6 +175,8 @@ const AddPaymentForm: React.FC = () => {
     form.append("loaded", loaded.trim());
     form.append("redeemed", redeemed.trim() || "0");
     if (cashout.trim()) form.append("cashout", cashout.trim());
+    if (hasCashout) form.append("cashoutMethod", cashoutMethod);
+    form.append("notes", notes.trim());
     if (isCustomGame) form.append("customGame", customGame.trim());
     else form.append("gameId", gameId);
     if (allowDuplicate) form.append("allowDuplicate", "true");
@@ -413,7 +425,42 @@ const AddPaymentForm: React.FC = () => {
                   disabled={disabled}
                 />
               </Field>
+              {hasCashout && (
+                <div className="anim-fade">
+                  <Field label="Cashout Method" error={errors.cashoutMethod} htmlFor="pay-cashout-method">
+                    <select
+                      id="pay-cashout-method"
+                      value={cashoutMethod}
+                      onChange={(e) => setCashoutMethod(e.target.value as PaymentMethod | "")}
+                      className={inputClass}
+                      disabled={disabled}
+                    >
+                      <option value="" disabled hidden>
+                        How was the cashout paid?
+                      </option>
+                      {PAYMENT_METHODS.map((m) => (
+                        <option key={m.value} value={m.value}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                </div>
+              )}
             </div>
+
+            <Field label="Notes (optional)" error={errors.notes} htmlFor="pay-notes" hint={`${notes.length}/${MAX_NOTES}`}>
+              <textarea
+                id="pay-notes"
+                rows={3}
+                placeholder="Anything worth remembering about this entry"
+                value={notes}
+                maxLength={MAX_NOTES}
+                onChange={(e) => setNotes(e.target.value)}
+                className={`${inputClass} resize-y`}
+                disabled={disabled}
+              />
+            </Field>
 
             <Field
               label={isEdit ? "Deposit screenshot (upload to replace)" : "Deposit screenshot (needed for validation)"}

@@ -7,9 +7,13 @@ import PaymentsTable from "./PaymentsTable";
 import PaymentDetailModal from "./PaymentDetailModal";
 import EditHistory from "./EditHistory";
 import AuditTab from "./AuditTab";
+import SummaryCards from "../payments/SummaryCards";
 import GamesTab from "./GamesTab";
+import PublicPageTab from "./PublicPageTab";
+import TagsTab from "./TagsTab";
 import { DeleteUserModal, EditUserModal, ManagedUser } from "./UserModals";
 import {
+  AdminSummary,
   adminCreateUser,
   adminUpdateUserRole,
   Role,
@@ -26,7 +30,6 @@ import {
   PaymentRow,
   ADMIN_PAGE_SIZE,
   adminPaymentsParams,
-  Totals,
   UserRow,
 } from "../../lib/paymentsApi";
 import { errorMessage } from "../../lib/http";
@@ -34,12 +37,14 @@ import { peekCached, updateCached, useCachedGet, useDropTick } from "../../lib/c
 import { mergeChanges, useDeltaSync, ChangedRow } from "../../lib/deltaSync";
 import { formatCents } from "../../utils/money";
 
-type Tab = "overview" | "payments" | "users" | "games" | "audit";
+type Tab = "overview" | "payments" | "users" | "games" | "tags" | "public" | "audit";
 const TABS: [Tab, string][] = [
   ["overview", "Overview"],
   ["payments", "Payments"],
   ["users", "Users"],
   ["games", "Games"],
+  ["tags", "Tags"],
+  ["public", "Public Page"],
   ["audit", "Audit Log"],
 ];
 const FILTER_KEYS: (keyof PaymentFilters)[] = ["dateFrom", "dateTo", "gameId", "search", "paymentMethod", "player"];
@@ -77,7 +82,7 @@ const useUrlState = () => {
 // Summaries come from the cache; a pushed change to their data refetches them by itself
 const OverviewTab: React.FC<{ filters: PaymentFilters }> = ({ filters }) => {
   const params = clean({ ...filters });
-  const s = useCachedGet<Totals & { totalUsers: number }>("/admin/summary", params);
+  const s = useCachedGet<AdminSummary>("/admin/summary", params);
   const g = useCachedGet<GameSummaryRow[]>("/admin/games/summary", params);
   const summary = s.data || null;
   const games = g.data || null;
@@ -87,12 +92,12 @@ const OverviewTab: React.FC<{ filters: PaymentFilters }> = ({ filters }) => {
   return (
     <div className="space-y-6">
       {error && <Banner>{error}</Banner>}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 items-start">
+        <SummaryCards summary={summary} />
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
         <StatCard label="Total Users" tone="purple" value={v(summary?.totalUsers)} />
         <StatCard label="Total Entries" tone="gray" value={v(summary?.count)} />
-        <StatCard label="Total Deposit" tone="green" value={summary ? formatCents(summary.totalDeposit) : "—"} />
-        <StatCard label="Total Loaded" tone="blue" value={summary ? formatCents(summary.totalLoaded) : "—"} />
-        <StatCard label="Total Redeemed" tone="purple" value={summary ? formatCents(summary.totalRedeemed || 0) : "—"} />
         <StatCard label="Edited Entries" tone="yellow" value={v(summary?.edited)} />
       </div>
       <Card title="Totals by Game">
@@ -664,6 +669,8 @@ const AdminDashboard: React.FC = () => {
             <UsersTab onSelect={(id) => update({ user: id, filters: {} })} />
           ))}
         {tab === "games" && <GamesTab onChanged={loadGames} />}
+        {tab === "tags" && <TagsTab />}
+        {tab === "public" && <PublicPageTab />}
         {tab === "audit" && <AuditTab />}
       </div>
 
