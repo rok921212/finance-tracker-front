@@ -442,6 +442,82 @@ export const adminMoveTag = async (id: string, direction: "up" | "down") => {
   return res;
 };
 
+// ---- wheel of fortune (public /wheel page) ----
+export interface WheelSegment {
+  id: string;
+  label: string;
+  /** Free text, e.g. "$50" or "10 Free Spins"; "" = label only */
+  amount: string;
+  color: string;
+  imageUrl: string | null;
+}
+export interface AdminWheelSegment extends WheelSegment {
+  active: boolean;
+  sortOrder: number;
+}
+export interface WheelConfig {
+  enabled: boolean;
+  title: string;
+  subtitle: string;
+  spinDurationSec: number;
+  extraRotations: number;
+  /** null = random among active segments */
+  targetSegmentId: string | null;
+  cooldownSec: number;
+}
+export interface PublicWheel extends Omit<WheelConfig, "targetSegmentId"> {
+  segments: WheelSegment[];
+}
+export interface WheelSpinResult extends WheelSegment {
+  segmentId: string;
+  index: number;
+  spinDurationSec: number;
+}
+export interface AdminWheel {
+  config: WheelConfig;
+  segments: AdminWheelSegment[];
+  recentSpins: { id: string; segmentId: string; label: string; amount: string; forced: boolean; createdAt: string }[];
+  limits: { minSegments: number; maxSegments: number };
+}
+
+const wheelChanged = () => invalidateCached("/admin/wheel", "/public/wheel");
+export const getPublicWheel = () => cachedGet<PublicWheel>("/public/wheel");
+/** The server picks where the wheel lands; the page only animates to it. */
+export const spinWheel = async () => (await http.post<WheelSpinResult>("/public/wheel/spin")).data;
+
+export const adminWheel = async () => (await http.get<AdminWheel>("/admin/wheel")).data;
+export const adminUpdateWheelConfig = async (patch: Partial<WheelConfig>) => {
+  const c = (await http.put<WheelConfig>("/admin/wheel/config", patch)).data;
+  wheelChanged();
+  return c;
+};
+/** Multipart: label, amount, color and an optional `image`. */
+export const adminCreateWheelSegment = async (form: FormData) => {
+  const s = (await http.post<AdminWheelSegment>("/admin/wheel/segments", form)).data;
+  wheelChanged();
+  return s;
+};
+/** JSON patch, or multipart when replacing the image (`image` file) or removing it (removeImage=true). */
+export const adminUpdateWheelSegment = async (
+  id: string,
+  patch: FormData | Partial<Pick<AdminWheelSegment, "label" | "amount" | "color" | "active">>
+) => {
+  const s = (await http.patch<AdminWheelSegment>(`/admin/wheel/segments/${id}`, patch)).data;
+  wheelChanged();
+  return s;
+};
+export const adminDeleteWheelSegment = async (id: string) => {
+  const res = (await http.delete<{ id: string }>(`/admin/wheel/segments/${id}`)).data;
+  wheelChanged();
+  return res;
+};
+/** Returns only the segments whose order changed, as [id, sortOrder] pairs. */
+export const adminMoveWheelSegment = async (id: string, direction: "up" | "down") => {
+  const res = (await http.post<{ changed: [string, number][] }>(`/admin/wheel/segments/${id}/move`, { direction })).data;
+  wheelChanged();
+  return res;
+};
+
 // ---- public (no login) ----
 export const getPublicGames = () => cachedGet<PublicGame[]>("/public/games");
 export const getPublicBanner = () => cachedGet<PublicBanner | null>("/public/banner");

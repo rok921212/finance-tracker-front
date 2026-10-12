@@ -17,6 +17,7 @@ const AdminLogin = lazy(() => import("./components/admin/AdminLogin"));
 const AdminDashboard = lazy(() => import("./components/admin/AdminDashboard"));
 const PublicGames = lazy(() => import("./components/public/PublicGames"));
 const PublicTags = lazy(() => import("./components/public/PublicTags"));
+const PublicWheel = lazy(() => import("./components/public/PublicWheel"));
 
 const RELOADED_KEY = "chunk-reloaded";
 const isChunkError = (error: Error) =>
@@ -79,6 +80,7 @@ function AppContent() {
           {/* No login: the link admins share from the Public Page tab */}
           <Route path="/play" element={<PublicGames />} />
           <Route path="/tags" element={<PublicTags />} />
+          <Route path="/wheel" element={<PublicWheel />} />
           <Route
             path="/dashboard"
             element={

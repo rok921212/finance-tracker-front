@@ -11,6 +11,7 @@ import SummaryCards from "../payments/SummaryCards";
 import GamesTab from "./GamesTab";
 import PublicPageTab from "./PublicPageTab";
 import TagsTab from "./TagsTab";
+import WheelTab from "./WheelTab";
 import { DeleteUserModal, EditUserModal, ManagedUser } from "./UserModals";
 import {
   AdminSummary,
@@ -37,13 +38,14 @@ import { peekCached, updateCached, useCachedGet, useDropTick } from "../../lib/c
 import { mergeChanges, useDeltaSync, ChangedRow } from "../../lib/deltaSync";
 import { formatCents } from "../../utils/money";
 
-type Tab = "overview" | "payments" | "users" | "games" | "tags" | "public" | "audit";
+type Tab = "overview" | "payments" | "users" | "games" | "tags" | "wheel" | "public" | "audit";
 const TABS: [Tab, string][] = [
   ["overview", "Overview"],
   ["payments", "Payments"],
   ["users", "Users"],
   ["games", "Games"],
   ["tags", "Tags"],
+  ["wheel", "Wheel"],
   ["public", "Public Page"],
   ["audit", "Audit Log"],
 ];
@@ -670,6 +672,7 @@ const AdminDashboard: React.FC = () => {
           ))}
         {tab === "games" && <GamesTab onChanged={loadGames} />}
         {tab === "tags" && <TagsTab />}
+        {tab === "wheel" && <WheelTab />}
         {tab === "public" && <PublicPageTab />}
         {tab === "audit" && <AuditTab />}
       </div>

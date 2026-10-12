@@ -172,6 +172,11 @@ const PublicPageTab: React.FC = () => (
       title="Public Games Link"
       description="Share this link with anyone. It needs no login and shows every active game with its image, in the same order as the Games tab."
     />
+    <PublicLinkCard
+      path="/wheel"
+      title="Wheel of Fortune Link"
+      description="Share this link with anyone. Visitors press Spin and the wheel lands on the reward you set in the Wheel tab."
+    />
     <BannerCard />
   </div>
 );
