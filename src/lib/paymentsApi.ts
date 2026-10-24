@@ -214,10 +214,17 @@ export interface PaymentFilters {
   userId?: string;
   gameId?: string;
   search?: string;
+  /** One or more payment methods, comma-separated */
   paymentMethod?: string;
   /** Player name (prefix match) */
   player?: string;
+  /** One or more backend usernames, comma-separated (exact match, any case) */
+  gameUsername?: string;
 }
+
+/** Comma-separated filter value <-> list of its parts */
+export const splitList = (v?: string) => (v ? v.split(",").filter(Boolean) : []);
+export const joinList = (list: string[]) => (list.length ? list.join(",") : undefined);
 
 // Drop empty values so the backend only sees real filters
 export const clean = (params: Record<string, unknown>) =>
@@ -316,6 +323,17 @@ export const ADMIN_PAGE_SIZE = 50;
 export const adminPaymentsParams = (f: PaymentFilters, page: number) => clean({ ...f, page, limit: ADMIN_PAGE_SIZE });
 export const adminPayments = (f: PaymentFilters, page: number) =>
   cachedGet<Paged<PaymentRow>>("/admin/payments", adminPaymentsParams(f, page), { deltaPrefix: "payments" });
+
+export interface GameUsernameRow {
+  name: string;
+  count: number;
+}
+/**
+ * GET /admin/payments/game-usernames -> GameUsernameRow[]: every backend username in use (case variants
+ * merged), most used first. The username filter itself is left out so picking names doesn't shrink the list.
+ */
+export const GAME_USERNAMES_URL = "/admin/payments/game-usernames";
+export const gameUsernamesParams = (f: PaymentFilters) => clean({ ...f, gameUsername: undefined });
 
 export const adminPayment = (id: string) => cachedGet<PaymentDetail>(`/admin/payments/${id}`, undefined, SWR);
 
@@ -555,15 +573,19 @@ export const peekPublicWheel = () => peekCached<PublicWheel>("/public/wheel");
 
 export type ExportFormat = "csv" | "pdf";
 
-/** Columns the admin can pick for exports (keys match the backend). csvOnly ones are left out of the PDF. */
-export const EXPORT_COLUMNS: { key: string; label: string; csvOnly?: boolean }[] = [
+/**
+ * Columns the admin can pick for exports (keys match the backend). csvOnly ones are left out of the PDF;
+ * pdfOnly ones of the CSV ("links" = Photo / Cashout buttons in the PDF, with the full URLs on its last page).
+ */
+export const EXPORT_COLUMNS: { key: string; label: string; csvOnly?: boolean; pdfOnly?: boolean }[] = [
   { key: "id", label: "Payment ID", csvOnly: true },
   { key: "date", label: "Date" },
   { key: "user", label: "User" },
   { key: "player", label: "Player" },
   { key: "game", label: "Game" },
   { key: "gameUsername", label: "Backend Username" },
-  { key: "paymentMethod", label: "Payment Method" },
+  // The PDF is split into one section per method instead
+  { key: "paymentMethod", label: "Payment Method", csvOnly: true },
   { key: "paymentTag", label: "Payment Tag" },
   { key: "deposit", label: "Deposit" },
   { key: "loaded", label: "Loaded" },
@@ -573,16 +595,30 @@ export const EXPORT_COLUMNS: { key: string; label: string; csvOnly?: boolean }[]
   { key: "notes", label: "Notes", csvOnly: true },
   { key: "createdAt", label: "Created At", csvOnly: true },
   { key: "editedAt", label: "Edited At", csvOnly: true },
+  { key: "screenshotUrl", label: "Screenshot URL", csvOnly: true },
+  { key: "cashoutProofUrl", label: "Cashout Proof URL", csvOnly: true },
+  { key: "links", label: "Images", pdfOnly: true },
 ];
 
+export const defaultExportName = () => `payments-${new Date().toISOString().slice(0, 10)}`;
+
+// Same rules as the backend: no path or reserved characters, no extension, at most 80 chars
+const safeExportName = (name?: string) =>
+  (name || "")
+    .replace(/\.(csv|pdf)$/i, "")
+    .replace(/[^\w.\- ]/g, "_")
+    .replace(/^[.\s]+|[.\s]+$/g, "")
+    .slice(0, 80) || defaultExportName();
+
 /** Download the filtered export through the authenticated client so the token is never put in a URL. */
-export const downloadPaymentsExport = async (f: PaymentFilters, format: ExportFormat, columns?: string[]) => {
-  const params = clean({ ...f, columns: columns?.join(",") });
+export const downloadPaymentsExport = async (f: PaymentFilters, format: ExportFormat, columns?: string[], filename?: string) => {
+  const name = safeExportName(filename);
+  const params = clean({ ...f, columns: columns?.join(","), filename: name });
   const res = await http.get(`/admin/payments/export.${format}`, { params, responseType: "blob" });
   const url = URL.createObjectURL(res.data as Blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `payments-${new Date().toISOString().slice(0, 10)}.${format}`;
+  a.download = `${name}.${format}`;
   document.body.appendChild(a);
   a.click();
   a.remove();

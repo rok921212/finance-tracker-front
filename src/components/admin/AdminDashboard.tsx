@@ -60,7 +60,7 @@ const TABS: [Tab, string][] = [
 // Admin filter dropdown includes disabled games so historical data stays filterable
 const toFilterGames = (gs: AdminGame[]): GameOption[] => gs.map((g) => ({ id: g.id, name: g.active ? g.name : `${g.name} (disabled)` }));
 
-const FILTER_KEYS: (keyof PaymentFilters)[] = ["dateFrom", "dateTo", "gameId", "search", "paymentMethod", "player"];
+const FILTER_KEYS: (keyof PaymentFilters)[] = ["dateFrom", "dateTo", "gameId", "search", "paymentMethod", "player", "gameUsername"];
 
 /** Filters live in the URL so views are shareable and survive reloads. */
 const useUrlState = () => {
@@ -568,7 +568,7 @@ const UserDetail: React.FC<{
       </div>
       <Card title="Payment History">
         <div className="mb-4">
-          <FilterBar filters={filters} onChange={onFilters} games={games} showUserSearch={false} />
+          <FilterBar filters={filters} onChange={onFilters} games={games} showUserSearch={false} namesScope={userFilters} />
         </div>
         <PaymentsList
           key={JSON.stringify(userFilters)}
@@ -610,11 +610,11 @@ const AdminDashboard: React.FC = () => {
     });
   }, []);
 
-  const onExport = async (format: ExportFormat, columns: string[]) => {
+  const onExport = async (format: ExportFormat, columns: string[], filename?: string) => {
     setExporting(format);
     setError("");
     try {
-      await downloadPaymentsExport(filters, format, columns);
+      await downloadPaymentsExport(filters, format, columns, filename);
     } catch (e) {
       setError(errorMessage(e, "Export failed"));
     } finally {
