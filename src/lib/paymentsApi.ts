@@ -251,8 +251,19 @@ export const createPayment = async (form: FormData, onProgress?: (pct: number) =
   return res.data;
 };
 
+/** A backend username this user entered before, most recently used first (case variants merged). */
+export interface UsernameSuggestion {
+  name: string;
+  count: number;
+  lastUsed: string;
+}
+export const MY_GAME_USERNAMES_URL = "/payments/game-usernames";
+/** The user's previous backend usernames, optionally only for one game (cached; refreshed after writes). */
+export const getMyGameUsernames = (gameId?: string) =>
+  cachedGet<UsernameSuggestion[]>(MY_GAME_USERNAMES_URL, clean({ gameId }), SWR);
+
 export const MY_PAGE_SIZE = 18; // fills a 3- or 2-column card grid evenly
-export type MySort = "date" | "deposit" | "loaded" | "redeemed" | "cashout" | "player";
+export type MySort = "date" | "deposit" | "loaded" | "redeemed" | "cashout" | "player" | "gameUsername" | "paymentMethod";
 
 /** How the user's list is shown. Empty = newest first, all players. */
 export interface MyListView {
@@ -413,11 +424,54 @@ export const adminUploadGameImage = async (id: string, file: File) => {
   gamesChanged();
   return g;
 };
+/** Permanently deletes a game and its saved logins. Refused (409) while any entry uses the game. */
+export const adminDeleteGame = async (id: string) => {
+  await http.delete(`/admin/games/${id}`);
+  gamesChanged();
+};
 export const adminRemoveGameImage = async (id: string) => {
   const g = (await http.delete<AdminGame>(`/admin/games/${id}/image`)).data;
   gamesChanged();
   return g;
 };
+
+// ---- backend logins per game (admin only; never cached: passwords only come from reveal) ----
+export interface GameCredential {
+  id: string;
+  gameId: string;
+  label: string;
+  username: string;
+  notes: string;
+  /** Game backend admin panel link ("" = none) */
+  adminUrl: string;
+  /** Player-facing game link ("" = none) */
+  gameUrl: string;
+  createdAt: string;
+  updatedAt: string;
+}
+export type GameCredentialInput = {
+  label?: string;
+  username?: string;
+  password?: string;
+  notes?: string;
+  adminUrl?: string;
+  gameUrl?: string;
+};
+const credentialsUrl = (gameId: string) => `/admin/games/${gameId}/credentials`;
+/** Number of saved logins per game id */
+export const adminCredentialCounts = async () => (await http.get<Record<string, number>>("/admin/games/credential-counts")).data;
+export const adminGameCredentials = async (gameId: string) => (await http.get<GameCredential[]>(credentialsUrl(gameId))).data;
+export const adminCreateGameCredential = async (gameId: string, body: GameCredentialInput) =>
+  (await http.post<GameCredential>(credentialsUrl(gameId), body)).data;
+/** An empty password keeps the current one */
+export const adminUpdateGameCredential = async (gameId: string, id: string, body: GameCredentialInput) =>
+  (await http.patch<GameCredential>(`${credentialsUrl(gameId)}/${id}`, body)).data;
+export const adminDeleteGameCredential = async (gameId: string, id: string) => {
+  await http.delete(`${credentialsUrl(gameId)}/${id}`);
+};
+/** The stored password in plain text (recorded in the audit log) */
+export const adminRevealGameCredential = async (gameId: string, id: string) =>
+  (await http.post<{ id: string; password: string }>(`${credentialsUrl(gameId)}/${id}/reveal`)).data.password;
 
 // ---- popup banner on the public games page ----
 const bannerChanged = () => invalidateCached("/admin/banner", "/public/banner");
@@ -610,10 +664,31 @@ const safeExportName = (name?: string) =>
     .replace(/^[.\s]+|[.\s]+$/g, "")
     .slice(0, 80) || defaultExportName();
 
+/** Backend usernames reported as one name in exports (matching ignores case; stored data is unchanged). */
+export interface UsernameMerge {
+  name: string;
+  members: string[];
+}
+
+export interface ExportOptions {
+  columns?: string[];
+  filename?: string;
+  merge?: UsernameMerge[];
+  /** Group rows by payment method, then backend username, with a subtotal per username */
+  groupByUsername?: boolean;
+}
+
 /** Download the filtered export through the authenticated client so the token is never put in a URL. */
-export const downloadPaymentsExport = async (f: PaymentFilters, format: ExportFormat, columns?: string[], filename?: string) => {
+export const downloadPaymentsExport = async (f: PaymentFilters, format: ExportFormat, opts: ExportOptions = {}) => {
+  const { columns, filename, merge, groupByUsername } = opts;
   const name = safeExportName(filename);
-  const params = clean({ ...f, columns: columns?.join(","), filename: name });
+  const params = clean({
+    ...f,
+    columns: columns?.join(","),
+    filename: name,
+    merge: merge && merge.length ? JSON.stringify(merge) : undefined,
+    groupByUsername: groupByUsername ? "1" : undefined,
+  });
   const res = await http.get(`/admin/payments/export.${format}`, { params, responseType: "blob" });
   const url = URL.createObjectURL(res.data as Blob);
   const a = document.createElement("a");

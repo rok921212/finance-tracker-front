@@ -1,4 +1,4 @@
-import React, { FormEvent, useEffect, useRef, useState } from "react";
+import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { AxiosError } from "axios";
 import AppHeader from "./AppHeader";
@@ -10,6 +10,7 @@ import {
   getActiveGames,
   peekActiveGames,
   getMyPayment,
+  getMyGameUsernames,
   GameOption,
   PaymentDetail,
   PaymentMethod,
@@ -20,6 +21,9 @@ import { errorCode, errorMessage } from "../../lib/http";
 import { useDropTick } from "../../lib/cache";
 import { formatDay, isValidAmount, toDayString } from "../../utils/money";
 import { compressCashoutProof, compressScreenshot } from "../../lib/compressImage";
+import { preloadOcr, readScreenshotText } from "../../lib/ocr";
+import { parseReceipt } from "../../lib/parseReceipt";
+import SuggestInput from "../ui/SuggestInput";
 
 type Errors = Partial<
   Record<
@@ -49,6 +53,27 @@ const CUSTOM_GAME = "__custom__";
 
 /** 45050 -> "450.50" for prefilling inputs (no thousands separators). */
 const centsToInput = (cents: number) => `${Math.trunc(cents / 100)}.${String(cents % 100).padStart(2, "0")}`;
+
+/** Fields the screenshot reader can fill in */
+type AutoField = "date" | "deposit" | "paymentMethod" | "player" | "paymentTag";
+
+/** Marks a field filled in from the screenshot, until the user changes it */
+const AutoBadge: React.FC<{ on: boolean }> = ({ on }) =>
+  on ? (
+    <span className="inline-block rounded bg-sky-500/20 border border-sky-400/50 px-1.5 text-[10px] font-semibold uppercase tracking-wide text-sky-300">
+      auto · check
+    </span>
+  ) : null;
+
+/** Entries saved in this visit to the form (it stays open for the next one) */
+interface SavedEntry {
+  id: string;
+  player: string;
+  deposit: string;
+  game: string;
+  gameUsername: string;
+  at: Date;
+}
 
 /** Serves both /payments/new and /payments/:id/edit. */
 const AddPaymentForm: React.FC = () => {
@@ -85,6 +110,96 @@ const AddPaymentForm: React.FC = () => {
   const [duplicate, setDuplicate] = useState<{ date: string } | null>(null);
   // Synchronous lock: blocks a second submit before React re-renders the disabled button
   const inFlight = useRef(false);
+  // Screenshot reading: fields it filled (until edited), whether it is running, and whether the
+  // user picked the date themselves (then it is never overwritten)
+  const [autoFilled, setAutoFilled] = useState<Set<AutoField>>(new Set());
+  const [scanning, setScanning] = useState(false);
+  const dateTouched = useRef(false);
+  const scanId = useRef(0);
+  // Previous backend usernames: this game's first, then the user's others
+  const [gameNames, setGameNames] = useState<string[]>([]);
+  const [allNames, setAllNames] = useState<string[]>([]);
+  const [saved, setSaved] = useState<SavedEntry[]>([]);
+  const topRef = useRef<HTMLDivElement>(null);
+
+  const clearAuto = (field: AutoField) =>
+    setAutoFilled((prev) => {
+      if (!prev.has(field)) return prev;
+      const next = new Set(prev);
+      next.delete(field);
+      return next;
+    });
+
+  // Load the OCR engine while the user fills the form, so reading a screenshot is quick
+  useEffect(() => {
+    if (!isEdit) preloadOcr();
+  }, [isEdit]);
+
+  useEffect(() => {
+    getMyGameUsernames()
+      .then((rows) => setAllNames(rows.map((r) => r.name)))
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (!gameId || gameId === CUSTOM_GAME) {
+      setGameNames([]);
+      return;
+    }
+    let cancelled = false;
+    getMyGameUsernames(gameId)
+      .then((rows) => !cancelled && setGameNames(rows.map((r) => r.name)))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [gameId]);
+  const usernameSuggestions = useMemo(() => {
+    const seen = new Set<string>();
+    return [...gameNames, ...allNames].filter((n) => {
+      const k = n.toLowerCase();
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }, [gameNames, allNames]);
+
+  // Read the deposit screenshot and fill the fields that are still empty. A newer screenshot
+  // (or a removed one) discards an older scan's result.
+  useEffect(() => {
+    const id = ++scanId.current;
+    if (!file || isEdit) {
+      setScanning(false);
+      return;
+    }
+    setScanning(true);
+    readScreenshotText(file)
+      .then((text) => {
+        if (id !== scanId.current) return;
+        const r = parseReceipt(text);
+        const filled: AutoField[] = [];
+        const fill = (field: AutoField, value: string | undefined, current: string, set: (v: string) => void) => {
+          if (value && !current.trim()) {
+            set(value);
+            filled.push(field);
+          }
+        };
+        fill("deposit", r.amount, valuesRef.current.deposit, setDeposit);
+        fill("player", r.player, valuesRef.current.player, setPlayer);
+        fill("paymentMethod", r.method, valuesRef.current.paymentMethod, (v) => setPaymentMethod(v as PaymentMethod));
+        fill("paymentTag", r.tag, valuesRef.current.paymentTag, setPaymentTag);
+        if (r.date && !dateTouched.current && r.date <= toDayString(new Date())) {
+          setDate(r.date);
+          filled.push("date");
+        }
+        setAutoFilled(new Set(filled));
+      })
+      .catch(() => {
+        // Reading is a convenience: on any failure the user just types the fields
+      })
+      .finally(() => {
+        if (id === scanId.current) setScanning(false);
+      });
+  }, [file, isEdit]);
 
   // Start shrinking picked images right away, so submit does not wait for it (results are memoized)
   useEffect(() => {
@@ -123,6 +238,10 @@ const AddPaymentForm: React.FC = () => {
       })
       .catch((e) => setLoadError(errorMessage(e, "Could not load this entry")));
   }, [editId]);
+
+  // Current values, read by the screenshot scan when it finishes (it only fills empty fields)
+  const valuesRef = useRef({ deposit, player, paymentMethod: paymentMethod as string, paymentTag });
+  valuesRef.current = { deposit, player, paymentMethod, paymentTag };
 
   const existingProof = isEdit ? original?.cashoutProof : null;
   // An entry whose game was disabled later can keep it; it just isn't offered for new entries
@@ -192,9 +311,41 @@ const AddPaymentForm: React.FC = () => {
     if (proof) form.append("cashoutProof", proof);
 
     try {
-      if (editId) await updatePayment(editId, form, setProgress);
-      else await createPayment(form, setProgress);
-      navigate("/payments");
+      if (editId) {
+        await updatePayment(editId, form, setProgress);
+        navigate("/payments");
+        return;
+      }
+      // New entry: stay on the form for the next one (no page change or reload). Game, backend
+      // username and date are kept; the rest is cleared for the next screenshot.
+      const res = await createPayment(form, setProgress);
+      const gameName = isCustomGame ? customGame.trim() : games?.find((g) => g.id === gameId)?.name || "";
+      setSaved((prev) => [
+        { id: res.payment.id, player: player.trim(), deposit: deposit.trim(), game: gameName, gameUsername: gameUsername.trim(), at: new Date() },
+        ...prev,
+      ]);
+      const name = gameUsername.trim();
+      const withName = (list: string[]) => [name, ...list.filter((n) => n.toLowerCase() !== name.toLowerCase())];
+      if (name) {
+        setGameNames(withName);
+        setAllNames(withName);
+      }
+      scanId.current++; // drop any scan still running for the saved screenshot
+      setFile(null);
+      setCashoutProof(null);
+      setDeposit("");
+      setLoaded("");
+      setRedeemed("0");
+      setCashout("");
+      setCashoutMethod("");
+      setNotes("");
+      setPlayer("");
+      setPaymentTag("");
+      setPaymentMethod("");
+      setErrors({});
+      setAutoFilled(new Set());
+      dateTouched.current = false;
+      topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (e) {
       if (errorCode(e) === "DUPLICATE_SCREENSHOT") {
         const existing = (e as AxiosError<{ existing?: { date: string } }>).response?.data?.existing;
@@ -247,9 +398,15 @@ const AddPaymentForm: React.FC = () => {
     <Page>
       <AppHeader />
       <div className="max-w-2xl mx-auto px-4 md:px-8 py-8">
+        <div ref={topRef} className="scroll-mt-20" />
         <Card title={isEdit ? "Edit Payment Entry" : "Add Payment Entry"}>
           <form onSubmit={onSubmit} className="space-y-5" noValidate>
             {gamesError && <Banner>{gamesError}</Banner>}
+            {!isEdit && saved.length > 0 && (
+              <Banner tone="ok">
+                Saved ✓ {saved[0].player} · ${saved[0].deposit}. Drop or paste (Ctrl+V) the next screenshot.
+              </Banner>
+            )}
             {submitError && <Banner>{submitError}</Banner>}
             {isEdit && <Banner tone="info">Changes you save are recorded with the time of the edit.</Banner>}
             <div role="note" className="p-3 rounded-lg border border-amber-400/60 bg-amber-500/15 text-amber-100 text-sm space-y-1">
@@ -267,13 +424,17 @@ const AddPaymentForm: React.FC = () => {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Field label="Date" error={errors.date} htmlFor="pay-date">
+              <Field label="Date" error={errors.date} htmlFor="pay-date" hint={<AutoBadge on={autoFilled.has("date")} />}>
                 <input
                   id="pay-date"
                   type="date"
                   value={date}
                   max={toDayString(new Date())}
-                  onChange={(e) => setDate(e.target.value)}
+                  onChange={(e) => {
+                    dateTouched.current = true;
+                    clearAuto("date");
+                    setDate(e.target.value);
+                  }}
                   className={inputClass}
                   disabled={disabled}
                 />
@@ -318,36 +479,47 @@ const AddPaymentForm: React.FC = () => {
               {gameId && (
                 <div className="anim-fade">
                   <Field label="Backend Username" error={errors.gameUsername} htmlFor="pay-game-username">
-                    <input
+                    <SuggestInput
                       id="pay-game-username"
                       placeholder="Backend username used to load the points"
                       value={gameUsername}
                       maxLength={60}
-                      autoComplete="off"
-                      onChange={(e) => setGameUsername(e.target.value)}
+                      onChange={setGameUsername}
+                      suggestions={usernameSuggestions}
                       className={inputClass}
                       disabled={disabled}
                     />
                   </Field>
                 </div>
               )}
-              <Field label="Player" error={errors.player} htmlFor="pay-player">
+              <Field label="Player" error={errors.player} htmlFor="pay-player" hint={<AutoBadge on={autoFilled.has("player")} />}>
                 <input
                   id="pay-player"
                   placeholder="Name used to load points"
                   value={player}
                   maxLength={60}
                   autoComplete="off"
-                  onChange={(e) => setPlayer(e.target.value)}
+                  onChange={(e) => {
+                    clearAuto("player");
+                    setPlayer(e.target.value);
+                  }}
                   className={inputClass}
                   disabled={disabled}
                 />
               </Field>
-              <Field label="Payment Method" error={errors.paymentMethod} htmlFor="pay-method">
+              <Field
+                label="Payment Method"
+                error={errors.paymentMethod}
+                htmlFor="pay-method"
+                hint={<AutoBadge on={autoFilled.has("paymentMethod")} />}
+              >
                 <select
                   id="pay-method"
                   value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod | "")}
+                  onChange={(e) => {
+                    clearAuto("paymentMethod");
+                    setPaymentMethod(e.target.value as PaymentMethod | "");
+                  }}
                   className={inputClass}
                   disabled={disabled}
                 >
@@ -363,27 +535,38 @@ const AddPaymentForm: React.FC = () => {
               </Field>
               {paymentMethod && (
                 <div className="anim-fade">
-                  <Field label={`${paymentMethodLabel(paymentMethod)} Tag`} error={errors.paymentTag} htmlFor="pay-tag">
+                  <Field
+                    label={`${paymentMethodLabel(paymentMethod)} Tag`}
+                    error={errors.paymentTag}
+                    htmlFor="pay-tag"
+                    hint={<AutoBadge on={autoFilled.has("paymentTag")} />}
+                  >
                     <input
                       id="pay-tag"
                       placeholder="Tag the money was sent to, e.g. $yourtag"
                       value={paymentTag}
                       maxLength={60}
                       autoComplete="off"
-                      onChange={(e) => setPaymentTag(e.target.value)}
+                      onChange={(e) => {
+                        clearAuto("paymentTag");
+                        setPaymentTag(e.target.value);
+                      }}
                       className={inputClass}
                       disabled={disabled}
                     />
                   </Field>
                 </div>
               )}
-              <Field label="Deposit" error={errors.deposit} htmlFor="pay-deposit">
+              <Field label="Deposit" error={errors.deposit} htmlFor="pay-deposit" hint={<AutoBadge on={autoFilled.has("deposit")} />}>
                 <input
                   id="pay-deposit"
                   inputMode="decimal"
                   placeholder="0.00"
                   value={deposit}
-                  onChange={(e) => setDeposit(e.target.value.replace(/[^\d.]/g, ""))}
+                  onChange={(e) => {
+                    clearAuto("deposit");
+                    setDeposit(e.target.value.replace(/[^\d.]/g, ""));
+                  }}
                   className={inputClass}
                   disabled={disabled}
                 />
@@ -486,7 +669,19 @@ const AddPaymentForm: React.FC = () => {
                   setErrors((prev) => ({ ...prev, screenshot: undefined }));
                 }}
                 disabled={disabled}
+                acceptPaste
+                prompt="Drop, paste (Ctrl+V) or click to add the screenshot"
               />
+              {!isEdit && scanning && (
+                <p className="mt-2 flex items-center gap-2 text-xs text-sky-300" aria-live="polite">
+                  <Spinner className="h-3 w-3" /> Reading screenshot…
+                </p>
+              )}
+              {!isEdit && !scanning && autoFilled.size > 0 && (
+                <p className="mt-2 text-xs text-sky-300" aria-live="polite">
+                  Filled {autoFilled.size} field{autoFilled.size === 1 ? "" : "s"} from the screenshot. Check the ones marked “auto”.
+                </p>
+              )}
             </Field>
 
             {hasCashout && (
@@ -536,6 +731,35 @@ const AddPaymentForm: React.FC = () => {
             </div>
           </form>
         </Card>
+
+        {!isEdit && saved.length > 0 && (
+          <Card title={`Added this session (${saved.length})`} className="mt-6">
+            <ul className="divide-y divide-gray-800 text-sm">
+              {saved.map((e) => (
+                <li key={e.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                  <span className="text-gray-200">
+                    <span className="font-medium">{e.player}</span>
+                    <span className="text-gray-400">
+                      {" "}
+                      · ${e.deposit} · {e.game} · {e.gameUsername}
+                    </span>
+                  </span>
+                  <span className="flex items-center gap-3 text-xs text-gray-500">
+                    {e.at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                    <button type="button" className="text-yellow-300 hover:underline" onClick={() => navigate(`/payments/${e.id}/edit`)}>
+                      Edit
+                    </button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-3 flex justify-end">
+              <Button variant="ghost" onClick={() => navigate("/payments")}>
+                Done, view all entries
+              </Button>
+            </div>
+          </Card>
+        )}
       </div>
 
       <Modal open={!!duplicate} onClose={() => setDuplicate(null)} title="Screenshot already used">
