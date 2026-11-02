@@ -24,6 +24,8 @@ interface Props {
   hint?: string;
   /** Tall full-page captures: preview the whole image in a scrollable box instead of shrinking it */
   tall?: boolean;
+  /** Also take an image pasted anywhere on the page (Ctrl+V / Cmd+V) */
+  acceptPaste?: boolean;
 }
 
 const ScreenshotDropzone: React.FC<Props> = ({
@@ -35,6 +37,7 @@ const ScreenshotDropzone: React.FC<Props> = ({
   prompt = "Drop screenshot here or click to browse",
   hint,
   tall,
+  acceptPaste,
 }) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -58,6 +61,24 @@ const ScreenshotDropzone: React.FC<Props> = ({
     setLocalError(err);
     onChange(err ? null : f);
   };
+
+  // Pasted image (e.g. a screenshot copied to the clipboard). Text pastes are left alone.
+  const pickRef = useRef(pick);
+  pickRef.current = pick;
+  useEffect(() => {
+    if (!acceptPaste || disabled) return;
+    const onPaste = (e: ClipboardEvent) => {
+      const item = Array.from(e.clipboardData?.items || []).find((i) => i.kind === "file" && i.type.startsWith("image/"));
+      const pasted = item?.getAsFile();
+      if (!pasted) return;
+      e.preventDefault();
+      const ext = pasted.type.split("/")[1] || "png";
+      // Clipboard images are often all named image.png: give each a distinct name
+      pickRef.current(new File([pasted], `pasted-${Date.now()}.${ext}`, { type: pasted.type }));
+    };
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  }, [acceptPaste, disabled]);
 
   const onDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();

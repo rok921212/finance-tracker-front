@@ -19,6 +19,34 @@ import { compressImage } from "../../lib/compressImage";
 
 export const PUBLIC_TAGS_PATH = "/tags";
 
+/** Public page showing only one payment method's tags */
+const methodTagsLink = (method: string) => `${window.location.origin}${PUBLIC_TAGS_PATH}?method=${encodeURIComponent(method)}`;
+
+/** The hosted (no-login) link a tag is shown on, with Copy and Open */
+const TagLink: React.FC<{ method: string }> = ({ method }) => {
+  const link = methodTagsLink(method);
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard blocked (e.g. not https): the link text is selectable
+    }
+  };
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+      <a href={link} target="_blank" rel="noopener noreferrer" className="font-mono text-sky-300 hover:underline break-all" title="Open the hosted tags page">
+        {link}
+      </a>
+      <button type="button" onClick={copy} className="text-gray-400 hover:text-white" aria-label={`Copy hosted link ${link}`}>
+        {copied ? "Copied ✓" : "Copy link"}
+      </button>
+    </div>
+  );
+};
+
 // QR codes need to stay sharp, so they are only shrunk to the server's 1000px bound
 const shrinkQr = (file: File) => compressImage(file, { maxWidth: 1000, maxHeight: 1000 });
 
@@ -275,6 +303,7 @@ const TagsTab: React.FC = () => {
                       <div className="font-mono font-medium break-all">{t.handle}</div>
                       {t.name && <div className="text-sm text-gray-400">{t.name}</div>}
                       {t.note && <div className="text-xs text-gray-500 mt-1">{t.note}</div>}
+                      {t.active ? <TagLink method={t.method} /> : <div className="mt-1 text-xs text-gray-500">Disabled: not shown on the hosted page</div>}
                     </>
                   )}
                 </Td>

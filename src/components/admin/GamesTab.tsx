@@ -2,6 +2,8 @@ import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } f
 import { Card, Button, Banner, Table, Th, Td, inputClass } from "../ui/ui";
 import {
   adminCreateGame,
+  adminCredentialCounts,
+  adminDeleteGame,
   adminGames,
   peekAdminGames,
   adminMoveGame,
@@ -16,6 +18,7 @@ import { useCachedGet, useDropTick } from "../../lib/cache";
 import { formatCents } from "../../utils/money";
 import { compressImage } from "../../lib/compressImage";
 import { validateScreenshot } from "../payments/ScreenshotDropzone";
+import GameLoginsPanel from "./GameLoginsPanel";
 
 const GamesTab: React.FC<{ onChanged: () => void }> = ({ onChanged }) => {
   const [games, setGames] = useState<AdminGame[] | null>(() => peekAdminGames() ?? null);
@@ -26,6 +29,24 @@ const GamesTab: React.FC<{ onChanged: () => void }> = ({ onChanged }) => {
   // One hidden file input shared by every row; imageFor is the game it is picking for
   const fileRef = useRef<HTMLInputElement>(null);
   const imageFor = useRef<string | null>(null);
+  // Saved backend logins: count per game, and the game whose logins panel is open
+  const [loginCounts, setLoginCounts] = useState<Record<string, number>>({});
+  const [loginsFor, setLoginsFor] = useState<string | null>(null);
+  // Game waiting for a second click to confirm its deletion
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
+  const removeGame = (g: AdminGame) =>
+    run(async () => {
+      await adminDeleteGame(g.id);
+      setGames((prev) => (prev ? prev.filter((x) => x.id !== g.id) : prev));
+      setConfirmDelete(null);
+      if (loginsFor === g.id) setLoginsFor(null);
+    }, false);
+  useEffect(() => {
+    adminCredentialCounts()
+      .then(setLoginCounts)
+      .catch(() => {});
+  }, []);
 
   // All-time loaded / redeemed per game; refetched by itself when payments change
   const summary = useCachedGet<GameSummaryRow[]>("/admin/games/summary");
@@ -118,7 +139,8 @@ const GamesTab: React.FC<{ onChanged: () => void }> = ({ onChanged }) => {
         Disabled games are hidden from new entries but stay attached to historical payments. Loaded and Redeemed are
         all-time totals across every entry for the game. Games users type with "Custom game" are added here as
         disabled; enable one to offer it in everyone's dropdown. Game images are shown on the public games page and
-        are cropped to 600×600 automatically.
+        are cropped to 600×600 automatically. Logins stores backend IDs, passwords and links per game (admins only).
+        Delete removes a game and its logins for good, and only works for games with no entries.
       </p>
       {error && <div className="mb-3"><Banner>{error}</Banner></div>}
       <Table
@@ -140,7 +162,8 @@ const GamesTab: React.FC<{ onChanged: () => void }> = ({ onChanged }) => {
         {games?.map((g, i) => {
           const t = totalsByGame.get(g.id);
           return (
-            <tr key={g.id} className="hover:bg-white/5">
+            <React.Fragment key={g.id}>
+            <tr className="hover:bg-white/5">
               <Td>
                 <div className="flex gap-1">
                   <button
@@ -224,6 +247,15 @@ const GamesTab: React.FC<{ onChanged: () => void }> = ({ onChanged }) => {
                       Remove image
                     </Button>
                   )}
+                  <Button
+                    variant="ghost"
+                    className="px-3 py-1 whitespace-nowrap"
+                    onClick={() => setLoginsFor(loginsFor === g.id ? null : g.id)}
+                    aria-expanded={loginsFor === g.id}
+                    title="Backend IDs and passwords for this game"
+                  >
+                    Logins ({loginCounts[g.id] ?? 0})
+                  </Button>
                   <Button variant="ghost" className="px-3 py-1" disabled={busy} onClick={() => setEditing({ id: g.id, name: g.name })}>
                     Rename
                   </Button>
@@ -235,9 +267,45 @@ const GamesTab: React.FC<{ onChanged: () => void }> = ({ onChanged }) => {
                   >
                     {g.active ? "Disable" : "Enable"}
                   </Button>
+                  {confirmDelete === g.id ? (
+                    <>
+                      <Button variant="danger" className="px-3 py-1 whitespace-nowrap" loading={busy} onClick={() => removeGame(g)}>
+                        Confirm delete
+                      </Button>
+                      <Button variant="ghost" className="px-3 py-1" disabled={busy} onClick={() => setConfirmDelete(null)}>
+                        Keep
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      variant="danger"
+                      className="px-3 py-1"
+                      disabled={busy || (!!summary.data && (t?.count ?? 0) > 0)}
+                      onClick={() => setConfirmDelete(g.id)}
+                      title={
+                        summary.data && (t?.count ?? 0) > 0
+                          ? "This game has entries, so it can't be deleted. Disable it instead."
+                          : `Delete ${g.name} and its saved logins`
+                      }
+                    >
+                      Delete
+                    </Button>
+                  )}
                 </div>
               </Td>
             </tr>
+            {loginsFor === g.id && (
+              <tr>
+                <td colSpan={8} className="px-3 pb-4">
+                  <GameLoginsPanel
+                    gameId={g.id}
+                    gameName={g.name}
+                    onCount={(n) => setLoginCounts((prev) => ({ ...prev, [g.id]: n }))}
+                  />
+                </td>
+              </tr>
+            )}
+            </React.Fragment>
           );
         })}
       </Table>

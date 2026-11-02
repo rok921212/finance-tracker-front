@@ -32,6 +32,7 @@ import {
   clean,
   downloadPaymentsExport,
   ExportFormat,
+  ExportOptions,
   GameOption,
   GameSummaryRow,
   Paged,
@@ -65,7 +66,7 @@ const FILTER_KEYS: (keyof PaymentFilters)[] = ["dateFrom", "dateTo", "gameId", "
 /** Filters live in the URL so views are shareable and survive reloads. */
 const useUrlState = () => {
   const [params, setParams] = useSearchParams();
-  // Unknown tabs (e.g. an old ?tab=games link) fall back to the overview
+  // Unknown tabs (e.g. a mistyped ?tab= link) fall back to the overview
   const tab = TABS.find(([t]) => t === params.get("tab"))?.[0] ?? "overview";
   const userId = params.get("user") || undefined;
   const filters = useMemo(() => {
@@ -610,11 +611,11 @@ const AdminDashboard: React.FC = () => {
     });
   }, []);
 
-  const onExport = async (format: ExportFormat, columns: string[], filename?: string) => {
+  const onExport = async (format: ExportFormat, opts: ExportOptions) => {
     setExporting(format);
     setError("");
     try {
-      await downloadPaymentsExport(filters, format, columns, filename);
+      await downloadPaymentsExport(filters, format, opts);
     } catch (e) {
       setError(errorMessage(e, "Export failed"));
     } finally {

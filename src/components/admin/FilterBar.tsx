@@ -4,6 +4,7 @@ import {
   defaultExportName,
   EXPORT_COLUMNS,
   ExportFormat,
+  ExportOptions,
   GAME_USERNAMES_URL,
   GameOption,
   GameUsernameRow,
@@ -12,7 +13,9 @@ import {
   PAYMENT_METHODS,
   PaymentFilters,
   splitList,
+  UsernameMerge,
 } from "../../lib/paymentsApi";
+import MergeUsernamesPanel, { readMerges, saveMerges } from "./MergeUsernamesPanel";
 import { useCachedGet } from "../../lib/cache";
 import { toDayString } from "../../utils/money";
 
@@ -51,7 +54,7 @@ interface Props {
   showUserSearch?: boolean;
   /** Filters the backend-username list is built from, when they differ from `filters` (e.g. scoped to one user) */
   namesScope?: PaymentFilters;
-  onExport?: (format: ExportFormat, columns: string[], filename?: string) => void;
+  onExport?: (format: ExportFormat, opts: ExportOptions) => void;
   /** Format currently being exported, if any */
   exporting?: ExportFormat | null;
 }
@@ -93,6 +96,16 @@ const readColumns = (): string[] => {
 };
 const columnOf = (k: string) => EXPORT_COLUMNS.find((c) => c.key === k);
 
+// "Group by backend username" export option, remembered in this browser (on by default)
+const GROUP_KEY = "exportGroupByUsername";
+const readGroupByUsername = () => {
+  try {
+    return localStorage.getItem(GROUP_KEY) !== "0";
+  } catch {
+    return true;
+  }
+};
+
 const FilterBar: React.FC<Props> = ({ filters, onChange, games, showUserSearch = true, namesScope, onExport, exporting }) => {
   const [quick, setQuick] = useState<Quick>(detectQuick(filters));
   const [search, setSearch] = useState(filters.search || "");
@@ -102,6 +115,22 @@ const FilterBar: React.FC<Props> = ({ filters, onChange, games, showUserSearch =
   const [nameSearch, setNameSearch] = useState("");
   const [showAllNames, setShowAllNames] = useState(false);
   const [fileName, setFileName] = useState("");
+  const [merges, setMergesState] = useState<UsernameMerge[]>(readMerges);
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [groupByUsername, setGroupByUsernameState] = useState(readGroupByUsername);
+  const setMerges = (next: UsernameMerge[]) => {
+    setMergesState(next);
+    saveMerges(next);
+  };
+  const setGroupByUsername = (on: boolean) => {
+    setGroupByUsernameState(on);
+    try {
+      localStorage.setItem(GROUP_KEY, on ? "1" : "0");
+    } catch {
+      // storage unavailable: kept for this visit only
+    }
+  };
+  const exportOpts = (cols: string[]): ExportOptions => ({ columns: cols, filename: fileName.trim() || undefined, merge: merges, groupByUsername });
   const setColumns = (next: string[]) => {
     const ordered = ALL_COLUMNS.filter((k) => next.includes(k));
     setColumnsState(ordered);
@@ -316,7 +345,7 @@ const FilterBar: React.FC<Props> = ({ filters, onChange, games, showUserSearch =
             />
             <Button
               variant="ghost"
-              onClick={() => onExport("csv", csvColumns, fileName.trim() || undefined)}
+              onClick={() => onExport("csv", exportOpts(csvColumns))}
               loading={exporting === "csv"}
               disabled={!!exporting || !csvColumns.length}
               title="Export filtered rows as CSV"
@@ -325,16 +354,30 @@ const FilterBar: React.FC<Props> = ({ filters, onChange, games, showUserSearch =
             </Button>
             <Button
               variant="ghost"
-              onClick={() => onExport("pdf", pdfColumns, fileName.trim() || undefined)}
+              onClick={() => onExport("pdf", exportOpts(pdfColumns))}
               loading={exporting === "pdf"}
               disabled={!!exporting || !pdfColumns.length}
-              title="Export filtered rows as PDF, grouped by payment method"
+              title={groupByUsername ? "Export filtered rows as PDF, grouped by payment method, then backend username" : "Export filtered rows as PDF, grouped by payment method"}
             >
               PDF
             </Button>
+            <Button
+              variant="ghost"
+              onClick={() => setMergeOpen((o) => !o)}
+              aria-expanded={mergeOpen}
+              aria-controls="export-merges"
+              title="Report several backend usernames as one in exports"
+            >
+              Merge usernames{merges.length ? ` (${merges.length})` : ""}
+            </Button>
+            <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer" title="Inside each payment method, group rows by backend username with a subtotal each">
+              <input type="checkbox" className="accent-red-600" checked={groupByUsername} onChange={(e) => setGroupByUsername(e.target.checked)} />
+              Group by backend username
+            </label>
           </>
         )}
       </div>
+      {onExport && mergeOpen && <MergeUsernamesPanel merges={merges} onChange={setMerges} names={names} />}
       {onExport && pickerOpen && (
         <div id="export-columns" className="anim-fade rounded-lg border border-gray-700 bg-black/40 p-3">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
