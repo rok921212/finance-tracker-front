@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { Card, Banner, Table, Th, Td, Pagination, Spinner } from "../ui/ui";
-import { adminEdits, clean, EditChange, EditRow, Paged, paymentMethodLabel, peekAdminEdits } from "../../lib/paymentsApi";
+import { Card, Banner, Table, Th, SortTh, Td, Pagination, Spinner } from "../ui/ui";
+import { adminEdits, adminEditsParams, EditChange, EditRow, Paged, paymentMethodLabel, peekAdminEdits, SortOrder } from "../../lib/paymentsApi";
 import { errorMessage } from "../../lib/http";
 import { useDropTick } from "../../lib/cache";
 import { formatCents, formatDay } from "../../utils/money";
@@ -71,23 +71,24 @@ interface Props {
 /** Users' edits to their entries: what was changed, from what to what, and when. */
 const EditHistory: React.FC<Props> = ({ userId, paymentId, onOpen, compact }) => {
   const [page, setPage] = useState(1);
+  const [order, setOrder] = useState<SortOrder>("desc");
   const [data, setData] = useState<Paged<EditRow> | null>(() => peekAdminEdits({ userId, paymentId }, 1) ?? null);
   const [error, setError] = useState("");
 
   useEffect(() => setPage(1), [userId, paymentId]);
   // Refetch when an edit is made anywhere (pushed by the server)
-  const changed = useDropTick("/admin/edits", clean({ userId, paymentId, page }));
+  const changed = useDropTick("/admin/edits", adminEditsParams({ userId, paymentId }, page, order));
 
   useEffect(() => {
     let cancelled = false;
     setError("");
-    adminEdits({ userId, paymentId }, page)
+    adminEdits({ userId, paymentId }, page, order)
       .then((d) => !cancelled && setData(d))
       .catch((e) => !cancelled && setError(errorMessage(e, "Could not load edit history")));
     return () => {
       cancelled = true;
     };
-  }, [userId, paymentId, page, changed]);
+  }, [userId, paymentId, page, order, changed]);
 
   if (compact) {
     return (
@@ -117,7 +118,16 @@ const EditHistory: React.FC<Props> = ({ userId, paymentId, onOpen, compact }) =>
         empty={!!data && data.items.length === 0}
         head={
           <>
-            <Th>Edited at</Th>
+            <SortTh
+              dir={order}
+              title="Sort by date"
+              onClick={() => {
+                setOrder(order === "asc" ? "desc" : "asc");
+                setPage(1);
+              }}
+            >
+              Edited at
+            </SortTh>
             {!userId && <Th>User</Th>}
             <Th>Entry</Th>
             <Th>What changed</Th>

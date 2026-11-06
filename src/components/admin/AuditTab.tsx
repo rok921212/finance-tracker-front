@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { Card, Banner, Table, Th, Td, Pagination } from "../ui/ui";
-import { adminAudit, AuditRow, Paged, peekAdminAudit } from "../../lib/paymentsApi";
+import { Card, Banner, Table, Th, SortTh, Td, Pagination } from "../ui/ui";
+import { adminAudit, adminAuditParams, AuditRow, Paged, peekAdminAudit, SortOrder } from "../../lib/paymentsApi";
 import { errorMessage } from "../../lib/http";
 import { useDropTick } from "../../lib/cache";
 import { formatCents } from "../../utils/money";
@@ -52,17 +52,18 @@ const describe = (a: AuditRow): string => {
 
 const AuditTab: React.FC = () => {
   const [page, setPage] = useState(1);
+  const [order, setOrder] = useState<SortOrder>("desc");
   const [data, setData] = useState<Paged<AuditRow> | null>(() => peekAdminAudit(1) ?? null);
   const [error, setError] = useState("");
 
   // Refetch when the log changes (pushed by the server); a page change shows its cached copy or a loader
-  const changed = useDropTick("/admin/audit", { page });
-  useEffect(() => setData(peekAdminAudit(page) ?? null), [page]);
+  const changed = useDropTick("/admin/audit", adminAuditParams(page, order));
+  useEffect(() => setData(peekAdminAudit(page, order) ?? null), [page, order]);
   useEffect(() => {
-    adminAudit(page)
+    adminAudit(page, order)
       .then(setData)
       .catch((e) => setError(errorMessage(e, "Could not load audit log")));
-  }, [page, changed]);
+  }, [page, order, changed]);
 
   return (
     <Card title="Audit Log">
@@ -72,7 +73,16 @@ const AuditTab: React.FC = () => {
         empty={!!data && data.items.length === 0}
         head={
           <>
-            <Th>When</Th>
+            <SortTh
+              dir={order}
+              title="Sort by date"
+              onClick={() => {
+                setOrder(order === "asc" ? "desc" : "asc");
+                setPage(1);
+              }}
+            >
+              When
+            </SortTh>
             <Th>Admin</Th>
             <Th>Action</Th>
             <Th>Target</Th>

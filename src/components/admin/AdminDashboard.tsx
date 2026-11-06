@@ -1,7 +1,7 @@
 import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
-import { Page, Card, StatCard, Banner, Button, Table, Th, Td, Pagination, Modal, inputClass } from "../ui/ui";
+import { Page, Card, StatCard, Banner, Button, Table, Th, SortTh, Td, Pagination, Modal, inputClass } from "../ui/ui";
 import FilterBar from "./FilterBar";
 import PaymentsTable from "./PaymentsTable";
 import PaymentDetailModal from "./PaymentDetailModal";
@@ -40,6 +40,8 @@ import {
   PaymentRow,
   ADMIN_PAGE_SIZE,
   adminPaymentsParams,
+  adminUsersParams,
+  SortOrder,
   UserRow,
 } from "../../lib/paymentsApi";
 import { errorMessage } from "../../lib/http";
@@ -78,19 +80,23 @@ const useUrlState = () => {
     return f;
   }, [params]);
 
+  // Payments sort: only "oldest first" is in the URL. Kept apart from the filters, which also feed the summaries and exports
+  const order: SortOrder = params.get("order") === "asc" ? "asc" : "desc";
+
   const update = useCallback(
-    (next: { tab?: Tab; user?: string | null; filters?: PaymentFilters }) => {
+    (next: { tab?: Tab; user?: string | null; filters?: PaymentFilters; order?: SortOrder }) => {
       const p = new URLSearchParams();
       p.set("tab", next.tab || tab);
       const user = next.user === undefined ? userId : next.user;
       if (user) p.set("user", user);
       const f = next.filters || filters;
       FILTER_KEYS.forEach((k) => f[k] && p.set(k, f[k] as string));
+      if ((next.order || order) === "asc") p.set("order", "asc");
       setParams(p);
     },
-    [tab, userId, filters, setParams]
+    [tab, userId, filters, order, setParams]
   );
-  return { tab, userId, filters, update };
+  return { tab, userId, filters, order, update };
 };
 
 // Summaries come from the cache; a pushed change to their data refetches them by itself
@@ -152,35 +158,43 @@ const OverviewTab: React.FC<{ filters: PaymentFilters }> = ({ filters }) => {
 const paymentPatches = new EventTarget();
 const broadcastDelete = (id: string) => paymentPatches.dispatchEvent(new CustomEvent("delete", { detail: id }));
 
-// Parent passes key={filters} so new filters remount at page 1 without a duplicate request
+// Parent passes key={filters + order} so a new view remounts at page 1 without a duplicate request
 const PaymentsList: React.FC<{
   filters: PaymentFilters;
+  order: SortOrder;
+  onOrder: (order: SortOrder) => void;
   onOpen: (id: string) => void;
   showUser?: boolean;
-}> = ({ filters, onOpen, showUser }) => {
+}> = ({ filters, order, onOrder, onOpen, showUser }) => {
   const [page, setPage] = useState(1);
   const [data, setData] = useState<Paged<PaymentRow> | null>(
-    () => peekCached<Paged<PaymentRow>>("/admin/payments", adminPaymentsParams(filters, 1)) || null
+    () => peekCached<Paged<PaymentRow>>("/admin/payments", adminPaymentsParams(filters, 1, order)) || null
   );
   const [loading, setLoading] = useState(!data);
   const [error, setError] = useState("");
   const dataRef = useRef(data);
   dataRef.current = data;
+  // The page whose rows are on screen: reloading it after a change keeps them visible
+  const shownPage = useRef(0);
 
   const load = useCallback(() => {
     let cancelled = false;
-    const cached = peekCached<Paged<PaymentRow>>("/admin/payments", adminPaymentsParams(filters, page));
+    const cached = peekCached<Paged<PaymentRow>>("/admin/payments", adminPaymentsParams(filters, page, order));
     if (cached) setData(cached);
-    setLoading(!cached);
+    setLoading(!cached && shownPage.current !== page);
     setError("");
-    adminPayments(filters, page)
-      .then((d) => !cancelled && setData(d))
+    adminPayments(filters, page, order)
+      .then((d) => {
+        if (cancelled) return;
+        shownPage.current = page;
+        setData(d);
+      })
       .catch((e) => !cancelled && setError(errorMessage(e, "Could not load payments")))
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
     };
-  }, [filters, page]);
+  }, [filters, page, order]);
   useEffect(load, [load]);
 
   const apply = useCallback(
@@ -189,11 +203,11 @@ const PaymentsList: React.FC<{
         if (!prev) return prev;
         const merged = mergeChanges(prev, changes, { limit: ADMIN_PAGE_SIZE, loadedAt: prev.sync?.cursor });
         const next = { ...prev, ...merged, pages: Math.max(1, Math.ceil(merged.total / ADMIN_PAGE_SIZE)) };
-        updateCached("/admin/payments", adminPaymentsParams(filters, page), () => next);
+        updateCached("/admin/payments", adminPaymentsParams(filters, page, order), () => next);
         return next;
       });
     },
-    [filters, page]
+    [filters, page, order]
   );
 
   // Permanent delete: drop the row everywhere at once
@@ -210,17 +224,18 @@ const PaymentsList: React.FC<{
   // Background delta sync: only changed rows are downloaded
   useDeltaSync<PaymentRow>({
     url: "/admin/payments/changes",
-    list: { url: "/admin/payments", params: adminPaymentsParams(filters, page) },
+    list: { url: "/admin/payments", params: adminPaymentsParams(filters, page, order) },
     params: filters as Record<string, unknown>,
     sync: data?.sync,
-    onChanges: apply,
+    // Changes are merged in newest-first order; oldest first reloads the page instead
+    onChanges: order === "asc" ? load : apply,
     onReset: load,
   });
 
   return (
     <>
       {error && <div className="mb-3"><Banner>{error}</Banner></div>}
-      <PaymentsTable data={data} loading={loading} onOpen={onOpen} onPage={setPage} showUser={showUser} />
+      <PaymentsTable data={data} loading={loading} onOpen={onOpen} onPage={setPage} showUser={showUser} order={order} onOrder={onOrder} />
     </>
   );
 };
@@ -317,6 +332,7 @@ const UsersTab: React.FC<{ onSelect: (id: string) => void }> = ({ onSelect }) =>
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
   const [page, setPage] = useState(1);
+  const [joined, setJoined] = useState<SortOrder | undefined>(); // unset: A-Z by username
   const [data, setData] = useState<Paged<UserRow> | null>(() => peekAdminUsers("", 1) ?? null);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -372,15 +388,20 @@ const UsersTab: React.FC<{ onSelect: (id: string) => void }> = ({ onSelect }) =>
     return () => clearTimeout(t);
   }, [search]);
 
+  const sortUsers = (next?: SortOrder) => {
+    setJoined(next);
+    setPage(1);
+  };
+
   // Refetch when the list's data changes (pushed), e.g. an entry or account elsewhere
-  const changed = useDropTick("/admin/users", clean({ search: debounced, page }));
+  const changed = useDropTick("/admin/users", adminUsersParams(debounced, page, joined));
   useEffect(() => {
     // A new search/page shows its cached copy (or a loader) instead of the previous page
-    if (!changed) setData(peekAdminUsers(debounced, page) ?? null);
-    adminUsers(debounced, page)
+    if (!changed) setData(peekAdminUsers(debounced, page, joined) ?? null);
+    adminUsers(debounced, page, joined)
       .then(setData)
       .catch((e) => setError(errorMessage(e, "Could not load users")));
-  }, [debounced, page, changed]);
+  }, [debounced, page, joined, changed]);
 
   return (
     <div className="space-y-6">
@@ -437,8 +458,13 @@ const UsersTab: React.FC<{ onSelect: (id: string) => void }> = ({ onSelect }) =>
           empty={!!data && data.items.length === 0}
           head={
             <>
-              <Th>User</Th>
+              <SortTh dir={joined ? undefined : "asc"} onClick={() => sortUsers(undefined)} title="Sort by username">
+                User
+              </SortTh>
               <Th>Role</Th>
+              <SortTh dir={joined} onClick={() => sortUsers(joined === "desc" ? "asc" : "desc")} title="Sort by join date">
+                Joined
+              </SortTh>
               <Th right>Entries</Th>
               <Th right>Deposit</Th>
               <Th right>Loaded</Th>
@@ -459,6 +485,7 @@ const UsersTab: React.FC<{ onSelect: (id: string) => void }> = ({ onSelect }) =>
                 <Td>
                   <RoleBadge role={u.role} />
                 </Td>
+                <Td className="whitespace-nowrap">{u.createdAt ? new Date(u.createdAt).toLocaleDateString() : "—"}</Td>
                 <Td right>{u.count.toLocaleString()}</Td>
                 <Td right>{formatCents(u.totalDeposit)}</Td>
                 <Td right>{formatCents(u.totalLoaded)}</Td>
@@ -519,9 +546,11 @@ const UserDetail: React.FC<{
   filters: PaymentFilters;
   games: GameOption[];
   onFilters: (f: PaymentFilters) => void;
+  order: SortOrder;
+  onOrder: (order: SortOrder) => void;
   onBack: () => void;
   onOpen: (id: string) => void;
-}> = ({ userId, filters, games, onFilters, onBack, onOpen }) => {
+}> = ({ userId, filters, games, onFilters, order, onOrder, onBack, onOpen }) => {
   const summary = useCachedGet<UserRow>(`/admin/users/${userId}/summary`);
   const user = summary.data || null;
   const error = summary.error ? errorMessage(summary.error, "Could not load user") : "";
@@ -572,8 +601,10 @@ const UserDetail: React.FC<{
           <FilterBar filters={filters} onChange={onFilters} games={games} showUserSearch={false} namesScope={userFilters} />
         </div>
         <PaymentsList
-          key={JSON.stringify(userFilters)}
+          key={JSON.stringify(userFilters) + order}
           filters={userFilters}
+          order={order}
+          onOrder={onOrder}
           onOpen={onOpen}
           showUser={false}
         />
@@ -587,7 +618,7 @@ const UserDetail: React.FC<{
 const AdminDashboard: React.FC = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const { tab, userId, filters, update } = useUrlState();
+  const { tab, userId, filters, order, update } = useUrlState();
   const [games, setGames] = useState<GameOption[]>(() => toFilterGames(peekAdminGames() || []));
   const [openId, setOpenId] = useState<string | null>(null);
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
@@ -624,6 +655,7 @@ const AdminDashboard: React.FC = () => {
   };
 
   const setFilters = (f: PaymentFilters) => update({ filters: f });
+  const setOrder = (o: SortOrder) => update({ order: o });
 
   return (
     <Page>
@@ -670,12 +702,12 @@ const AdminDashboard: React.FC = () => {
         {tab === "overview" && <OverviewTab filters={filters} />}
         {tab === "overview" && (
           <Card title="Recent Payments" actions={<Button variant="ghost" onClick={() => update({ tab: "payments" })}>View all</Button>}>
-            <PaymentsList key={JSON.stringify(filters)} filters={filters} onOpen={setOpenId} />
+            <PaymentsList key={JSON.stringify(filters) + order} filters={filters} order={order} onOrder={setOrder} onOpen={setOpenId} />
           </Card>
         )}
         {tab === "payments" && (
           <Card title="All Payments">
-            <PaymentsList key={JSON.stringify(filters)} filters={filters} onOpen={setOpenId} />
+            <PaymentsList key={JSON.stringify(filters) + order} filters={filters} order={order} onOrder={setOrder} onOpen={setOpenId} />
           </Card>
         )}
         {tab === "users" &&
@@ -685,6 +717,8 @@ const AdminDashboard: React.FC = () => {
               filters={filters}
               games={games}
               onFilters={setFilters}
+              order={order}
+              onOrder={setOrder}
               onBack={() => update({ user: null, filters: {} })}
               onOpen={setOpenId}
             />

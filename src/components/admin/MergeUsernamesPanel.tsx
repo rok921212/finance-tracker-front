@@ -36,7 +36,7 @@ interface Props {
   names: GameUsernameRow[];
 }
 
-const chip = (on: boolean, off = false) =>
+export const chip = (on: boolean, off = false) =>
   `px-2.5 py-1 rounded-lg text-xs border transition-colors ${
     off
       ? "border-gray-800 text-gray-600 cursor-not-allowed"

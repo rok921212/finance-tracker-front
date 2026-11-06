@@ -1,5 +1,6 @@
 import http from "./http";
-import { cachedGet, invalidateCached, peekCached, updateCached, CacheOptions } from "./cache";
+import { cachedGet, invalidateCached, keyOf, parseVersions, peekCached, settleWrite, trackedWrite, updateCached, CacheOptions } from "./cache";
+import { mergeChanges } from "./deltaSync";
 import type { SyncToken } from "./deltaSync";
 
 // Reads show any cached copy at once and refresh it in the background (see cachedGet `swr`)
@@ -241,13 +242,22 @@ export const getActiveGames = () => cachedGet<GameOption[]>("/games", undefined,
 // (The games list doesn't depend on payments, so it is kept)
 const paymentsChanged = () => invalidateCached("/payments", "/admin/");
 
-export const createPayment = async (form: FormData, onProgress?: (pct: number) => void) => {
-  const res = await http.post<{ message: string; payment: { id: string } }>("/payments", form, {
-    onUploadProgress: (e) => {
-      if (onProgress && e.total) onProgress(Math.round((e.loaded / e.total) * 100));
-    },
+// Everything a payment write can make stale, apart from the rows the write itself patches in
+const PAYMENT_DATA = ["/payments", "/admin/"];
+// The user's default list, first page: the one own writes patch in place
+const myFirstPage = () => ({ url: "/payments", params: myPaymentsParams(1) });
+
+/** Adds the new row to the cached list, so no table has to reload for it. */
+export const createPayment = async (form: FormData) => {
+  const list = myFirstPage();
+  const res = await trackedWrite("payments", list, () => http.post<{ message: string; payment: PaymentDetail }>("/payments", form));
+  const row = res.data.payment;
+  updateCached<Paged<PaymentRow>>(list.url, list.params, (d) => {
+    const { items } = mergeChanges<PaymentRow>(d, [{ ...row, createdAt: "", match: true }], { limit: MY_PAGE_SIZE });
+    const total = d.total + 1; // counted even when the row sorts past this page
+    return { ...d, items, total, pages: Math.max(1, Math.ceil(total / MY_PAGE_SIZE)) };
   });
-  paymentsChanged();
+  settleWrite(PAYMENT_DATA, parseVersions(res.headers["x-data-versions"]), keyOf(list.url, list.params));
   return res.data;
 };
 
@@ -269,12 +279,22 @@ export type MySort = "date" | "deposit" | "loaded" | "redeemed" | "cashout" | "p
 export interface MyListView {
   sort?: MySort;
   order?: "asc" | "desc";
-  /** Exact player name (any case) */
+  /** Start of the player name or payment tag (any case) */
   player?: string;
+  /** Inclusive day range, YYYY-MM-DD */
+  dateFrom?: string;
+  dateTo?: string;
 }
 
 /** True when the list is in its default order with no filter (live updates can be merged in place). */
-export const isDefaultView = (view: MyListView = {}) => (!view.sort || view.sort === "date") && !view.order && !view.player;
+export const isDefaultView = (view: MyListView = {}) =>
+  (!view.sort || view.sort === "date") && !view.order && !view.player && !view.dateFrom && !view.dateTo;
+
+/** The view's filters as query params, shared by the list and the summary (undefined when none are set). */
+export const myFilterParams = ({ player, dateFrom, dateTo }: MyListView = {}) => {
+  const params = clean({ player, dateFrom, dateTo });
+  return Object.keys(params).length ? params : undefined;
+};
 
 // Only non-default values are sent, so the default view keeps one cache key
 export const myPaymentsParams = (page: number, view: MyListView = {}) => ({
@@ -282,26 +302,37 @@ export const myPaymentsParams = (page: number, view: MyListView = {}) => ({
   limit: MY_PAGE_SIZE,
   ...(view.sort && view.sort !== "date" ? { sort: view.sort } : {}),
   ...(view.order ? { order: view.order } : {}),
-  ...(view.player ? { player: view.player } : {}),
+  ...myFilterParams(view),
 });
+// Changed rows can only be merged into the default order; any other view reloads when its data changes
 export const getMyPayments = (page: number, view?: MyListView) =>
-  cachedGet<Paged<PaymentRow>>("/payments", myPaymentsParams(page, view), { deltaPrefix: "payments" });
+  cachedGet<Paged<PaymentRow>>("/payments", myPaymentsParams(page, view), isDefaultView(view) ? { deltaPrefix: "payments" } : {});
 
-/** Totals; with a player, only that player's entries are counted. */
-export const getMySummary = (player?: string) =>
-  cachedGet<MySummary>("/payments/summary", player ? { player } : undefined, SWR);
+/** Totals of the entries matching the view's player and date filters. */
+export const getMySummary = (view?: MyListView) => cachedGet<MySummary>("/payments/summary", myFilterParams(view), SWR);
 
 /** Single entry including the full-size screenshot URL (list rows only carry a thumbnail). */
 export const getMyPayment = (id: string) => cachedGet<PaymentDetail>(`/payments/${id}`, undefined, SWR);
 
 /** Edit an own entry (the change is logged for the admin); omitting screenshot / cashoutProof keeps the current ones. */
 export const updatePayment = async (id: string, form: FormData, onProgress?: (pct: number) => void) => {
-  const res = await http.patch<{ message: string; payment: PaymentDetail }>(`/payments/${id}`, form, {
-    onUploadProgress: (e) => {
-      if (onProgress && e.total) onProgress(Math.round((e.loaded / e.total) * 100));
-    },
-  });
-  paymentsChanged();
+  const list = myFirstPage();
+  const res = await trackedWrite("payments", list, () =>
+    http.patch<{ message: string; payment: PaymentDetail }>(`/payments/${id}`, form, {
+      onUploadProgress: (e) => {
+        if (onProgress && e.total) onProgress(Math.round((e.loaded / e.total) * 100));
+      },
+    })
+  );
+  const row = res.data.payment;
+  const items = peekCached<Paged<PaymentRow>>(list.url, list.params)?.items || [];
+  const shown = items.find((r) => r.id === id);
+  // The first page keeps its order unless the entry changed day, or moved up into it from a later page
+  const inPlace = shown ? shown.date === row.date : !!items.length && row.date < items[items.length - 1].date;
+  if (shown && inPlace) {
+    updateCached<Paged<PaymentRow>>(list.url, list.params, (d) => ({ ...d, items: d.items.map((r) => (r.id === id ? { ...r, ...row } : r)) }));
+  }
+  settleWrite(PAYMENT_DATA, parseVersions(res.headers["x-data-versions"]), inPlace ? keyOf(list.url, list.params) : undefined);
   return res.data;
 };
 
@@ -331,9 +362,15 @@ export const adminSummary = (f: PaymentFilters) =>
   cachedGet<AdminSummary>("/admin/summary", clean({ ...f }), SWR);
 
 export const ADMIN_PAGE_SIZE = 50;
-export const adminPaymentsParams = (f: PaymentFilters, page: number) => clean({ ...f, page, limit: ADMIN_PAGE_SIZE });
-export const adminPayments = (f: PaymentFilters, page: number) =>
-  cachedGet<Paged<PaymentRow>>("/admin/payments", adminPaymentsParams(f, page), { deltaPrefix: "payments" });
+/** Direction of an admin list's date sort. Newest first is the default and is never sent, so it keeps one cache key. */
+export type SortOrder = "asc" | "desc";
+const orderParam = (order?: SortOrder) => (order === "asc" ? order : undefined);
+
+export const adminPaymentsParams = (f: PaymentFilters, page: number, order?: SortOrder) =>
+  clean({ ...f, page, limit: ADMIN_PAGE_SIZE, order: orderParam(order) });
+export const adminPayments = (f: PaymentFilters, page: number, order?: SortOrder) =>
+  // Delta sync merges rows newest first; oldest first is dropped on a change and refetched instead
+  cachedGet<Paged<PaymentRow>>("/admin/payments", adminPaymentsParams(f, page, order), order === "asc" ? {} : { deltaPrefix: "payments" });
 
 export interface GameUsernameRow {
   name: string;
@@ -349,18 +386,24 @@ export const gameUsernamesParams = (f: PaymentFilters) => clean({ ...f, gameUser
 export const adminPayment = (id: string) => cachedGet<PaymentDetail>(`/admin/payments/${id}`, undefined, SWR);
 
 /** Users' edit history (what changed, when), newest first; filter by user and/or entry. */
-export const adminEdits = (f: { userId?: string; paymentId?: string }, page: number) =>
-  cachedGet<Paged<EditRow>>("/admin/edits", clean({ ...f, page }), SWR);
+export const adminEditsParams = (f: { userId?: string; paymentId?: string }, page: number, order?: SortOrder) =>
+  clean({ ...f, page, order: orderParam(order) });
+export const adminEdits = (f: { userId?: string; paymentId?: string }, page: number, order?: SortOrder) =>
+  cachedGet<Paged<EditRow>>("/admin/edits", adminEditsParams(f, page, order), SWR);
 
 /** Permanent delete (admin only). */
 export const adminDeletePayment = async (id: string) => {
-  const res = await http.delete<{ message: string; id: string }>(`/admin/payments/${id}`);
-  paymentsChanged();
+  // Open tables drop the row themselves and sync the rest as a delta
+  const res = await trackedWrite("payments", { url: "/admin/payments" }, () => http.delete<{ message: string; id: string }>(`/admin/payments/${id}`));
+  settleWrite(PAYMENT_DATA, parseVersions(res.headers["x-data-versions"]));
   return res.data;
 };
 
-export const adminUsers = (search: string, page: number) =>
-  cachedGet<Paged<UserRow>>("/admin/users", clean({ search, page }), SWR);
+/** `joined` sorts by join date; left out, the list is A-Z by username. */
+export const adminUsersParams = (search: string, page: number, joined?: SortOrder) =>
+  clean({ search, page, ...(joined ? { sort: "createdAt", order: joined } : {}) });
+export const adminUsers = (search: string, page: number, joined?: SortOrder) =>
+  cachedGet<Paged<UserRow>>("/admin/users", adminUsersParams(search, page, joined), SWR);
 
 export const adminUserSummary = (id: string) => cachedGet<UserRow>(`/admin/users/${id}/summary`, undefined, SWR);
 
@@ -607,17 +650,19 @@ export const adminMoveGame = async (id: string, direction: "up" | "down") => {
   return res;
 };
 
-export const adminAudit = (page: number) => cachedGet<Paged<AuditRow>>("/admin/audit", { page }, SWR);
+export const adminAuditParams = (page: number, order?: SortOrder) => clean({ page, order: orderParam(order) });
+export const adminAudit = (page: number, order?: SortOrder) => cachedGet<Paged<AuditRow>>("/admin/audit", adminAuditParams(page, order), SWR);
 
 // ---- cached copies, for a first render without a loading state (same URLs as the loaders above) ----
-export const peekAdminUsers = (search: string, page: number) => peekCached<Paged<UserRow>>("/admin/users", clean({ search, page }));
+export const peekAdminUsers = (search: string, page: number, joined?: SortOrder) =>
+  peekCached<Paged<UserRow>>("/admin/users", adminUsersParams(search, page, joined));
 export const peekAdminGames = () => peekCached<AdminGame[]>("/admin/games");
 export const peekAdminTags = () => peekCached<AdminTag[]>("/admin/tags");
 export const peekAdminWheel = () => peekCached<AdminWheel>("/admin/wheel");
 export const peekAdminBanner = () => peekCached<AdminBanner>("/admin/banner");
-export const peekAdminAudit = (page: number) => peekCached<Paged<AuditRow>>("/admin/audit", { page });
-export const peekAdminEdits = (f: { userId?: string; paymentId?: string }, page: number) =>
-  peekCached<Paged<EditRow>>("/admin/edits", clean({ ...f, page }));
+export const peekAdminAudit = (page: number, order?: SortOrder) => peekCached<Paged<AuditRow>>("/admin/audit", adminAuditParams(page, order));
+export const peekAdminEdits = (f: { userId?: string; paymentId?: string }, page: number, order?: SortOrder) =>
+  peekCached<Paged<EditRow>>("/admin/edits", adminEditsParams(f, page, order));
 export const peekAdminPayment = (id: string) => peekCached<PaymentDetail>(`/admin/payments/${id}`);
 export const peekActiveGames = () => peekCached<GameOption[]>("/games");
 export const peekPublicGames = () => peekCached<PublicGame[]>("/public/games");
@@ -670,17 +715,25 @@ export interface UsernameMerge {
   members: string[];
 }
 
+/** A backend username left out of the PDF (matching ignores case); no methods means every method. */
+export interface ExportExclusion {
+  name: string;
+  methods: PaymentMethod[];
+}
+
 export interface ExportOptions {
   columns?: string[];
   filename?: string;
   merge?: UsernameMerge[];
   /** Group rows by payment method, then backend username, with a subtotal per username */
   groupByUsername?: boolean;
+  /** PDF only */
+  exclude?: ExportExclusion[];
 }
 
 /** Download the filtered export through the authenticated client so the token is never put in a URL. */
 export const downloadPaymentsExport = async (f: PaymentFilters, format: ExportFormat, opts: ExportOptions = {}) => {
-  const { columns, filename, merge, groupByUsername } = opts;
+  const { columns, filename, merge, groupByUsername, exclude } = opts;
   const name = safeExportName(filename);
   const params = clean({
     ...f,
@@ -688,12 +741,24 @@ export const downloadPaymentsExport = async (f: PaymentFilters, format: ExportFo
     filename: name,
     merge: merge && merge.length ? JSON.stringify(merge) : undefined,
     groupByUsername: groupByUsername ? "1" : undefined,
+    exclude: exclude && exclude.length ? JSON.stringify(exclude) : undefined,
   });
   const res = await http.get(`/admin/payments/export.${format}`, { params, responseType: "blob" });
-  const url = URL.createObjectURL(res.data as Blob);
+  saveFile(res.data as Blob, `${name}.${format}`);
+};
+
+/** The user's own entries as a PDF, under the view's player and date filters. */
+export const downloadMyPdf = async (view: MyListView = {}) => {
+  const filename = defaultExportName();
+  const res = await http.get("/payments/export.pdf", { params: { ...myFilterParams(view), filename }, responseType: "blob" });
+  saveFile(res.data as Blob, `${filename}.pdf`);
+};
+
+const saveFile = (blob: Blob, name: string) => {
+  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${name}.${format}`;
+  a.download = name;
   document.body.appendChild(a);
   a.click();
   a.remove();

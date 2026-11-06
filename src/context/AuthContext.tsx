@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import type { AxiosError } from "axios";
 import http, { errorMessage } from "../lib/http";
 import { clearCache, useCachedGet } from "../lib/cache";
+import { clearSaves } from "../lib/pendingSaves";
 import { startLiveEvents, stopLiveEvents } from "../lib/liveEvents";
 
 export interface User {
@@ -114,6 +115,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const logout = (): void => {
     stopLiveEvents();
     clearCache(); // never show one account's cached data to the next
+    clearSaves();
     localStorage.removeItem("token");
     saveUser(null);
     setToken(null);

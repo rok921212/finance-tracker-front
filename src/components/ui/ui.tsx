@@ -182,6 +182,30 @@ export const Modal: React.FC<{ open: boolean; onClose: () => void; title: ReactN
 export const Th: React.FC<{ children?: ReactNode; right?: boolean }> = ({ children, right }) => (
   <th className={`px-3 py-3 font-medium ${right ? "text-right" : "text-left"}`}>{children}</th>
 );
+/** Clickable column header; `dir` is set while the table is sorted by this column. */
+export const SortTh: React.FC<{ children?: ReactNode; right?: boolean; dir?: "asc" | "desc"; onClick: () => void; title?: string }> = ({
+  children,
+  right,
+  dir,
+  onClick,
+  title,
+}) => (
+  <th
+    scope="col"
+    aria-sort={dir ? (dir === "asc" ? "ascending" : "descending") : "none"}
+    className={`px-3 py-3 font-medium ${right ? "text-right" : "text-left"}`}
+  >
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className={`inline-flex items-center gap-1 uppercase tracking-wider hover:text-white ${dir ? "text-white" : ""}`}
+    >
+      {children}
+      <span className="text-[10px] w-2">{dir ? (dir === "asc" ? "▲" : "▼") : ""}</span>
+    </button>
+  </th>
+);
 export const Td: React.FC<{ children?: ReactNode; right?: boolean; className?: string }> = ({ children, right, className = "" }) => (
   <td className={`px-3 py-3 ${right ? "text-right tabular-nums" : ""} ${className}`}>{children}</td>
 );

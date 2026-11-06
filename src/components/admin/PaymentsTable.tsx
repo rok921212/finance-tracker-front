@@ -1,6 +1,6 @@
 import React from "react";
-import { Table, Th, Td, Pagination } from "../ui/ui";
-import { Paged, PaymentRow, paymentMethodLabel } from "../../lib/paymentsApi";
+import { Table, Th, SortTh, Td, Pagination } from "../ui/ui";
+import { Paged, PaymentRow, paymentMethodLabel, SortOrder } from "../../lib/paymentsApi";
 import { formatCents, formatDay } from "../../utils/money";
 import { preloadImage } from "../../lib/preloadImage";
 
@@ -10,9 +10,11 @@ interface Props {
   onOpen: (id: string) => void;
   onPage: (page: number) => void;
   showUser?: boolean;
+  order: SortOrder;
+  onOrder: (order: SortOrder) => void;
 }
 
-const PaymentsTable: React.FC<Props> = ({ data, loading, onOpen, onPage, showUser = true }) => (
+const PaymentsTable: React.FC<Props> = ({ data, loading, onOpen, onPage, showUser = true, order, onOrder }) => (
   <>
     <Table
       loading={loading}
@@ -20,7 +22,9 @@ const PaymentsTable: React.FC<Props> = ({ data, loading, onOpen, onPage, showUse
       head={
         <>
           {showUser && <Th>User</Th>}
-          <Th>Date</Th>
+          <SortTh dir={order} onClick={() => onOrder(order === "asc" ? "desc" : "asc")} title="Sort by date">
+            Date
+          </SortTh>
           <Th>Game</Th>
           <Th>Player</Th>
           <Th>Backend Username</Th>

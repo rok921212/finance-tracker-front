@@ -3,6 +3,7 @@ import { Button, inputClass } from "../ui/ui";
 import {
   defaultExportName,
   EXPORT_COLUMNS,
+  ExportExclusion,
   ExportFormat,
   ExportOptions,
   GAME_USERNAMES_URL,
@@ -16,6 +17,7 @@ import {
   UsernameMerge,
 } from "../../lib/paymentsApi";
 import MergeUsernamesPanel, { readMerges, saveMerges } from "./MergeUsernamesPanel";
+import ExcludeEntriesPanel from "./ExcludeEntriesPanel";
 import { useCachedGet } from "../../lib/cache";
 import { toDayString } from "../../utils/money";
 
@@ -117,6 +119,9 @@ const FilterBar: React.FC<Props> = ({ filters, onChange, games, showUserSearch =
   const [fileName, setFileName] = useState("");
   const [merges, setMergesState] = useState<UsernameMerge[]>(readMerges);
   const [mergeOpen, setMergeOpen] = useState(false);
+  // Not remembered: the PDF doesn't mention exclusions, so a forgotten one must not carry into a later report
+  const [excludes, setExcludes] = useState<ExportExclusion[]>([]);
+  const [excludeOpen, setExcludeOpen] = useState(false);
   const [groupByUsername, setGroupByUsernameState] = useState(readGroupByUsername);
   const setMerges = (next: UsernameMerge[]) => {
     setMergesState(next);
@@ -228,8 +233,8 @@ const FilterBar: React.FC<Props> = ({ filters, onChange, games, showUserSearch =
           </label>
         )}
         <label className="text-xs text-gray-400">
-          Player
-          <input className={inputClass} placeholder="Player name" value={player} onChange={(e) => setPlayer(e.target.value)} />
+          Player or tag
+          <input className={inputClass} placeholder="Player name or payment tag" value={player} onChange={(e) => setPlayer(e.target.value)} />
         </label>
         <label className="text-xs text-gray-400">
           Game
@@ -354,7 +359,7 @@ const FilterBar: React.FC<Props> = ({ filters, onChange, games, showUserSearch =
             </Button>
             <Button
               variant="ghost"
-              onClick={() => onExport("pdf", exportOpts(pdfColumns))}
+              onClick={() => onExport("pdf", { ...exportOpts(pdfColumns), exclude: excludes })}
               loading={exporting === "pdf"}
               disabled={!!exporting || !pdfColumns.length}
               title={groupByUsername ? "Export filtered rows as PDF, grouped by payment method, then backend username" : "Export filtered rows as PDF, grouped by payment method"}
@@ -370,6 +375,15 @@ const FilterBar: React.FC<Props> = ({ filters, onChange, games, showUserSearch =
             >
               Merge usernames{merges.length ? ` (${merges.length})` : ""}
             </Button>
+            <Button
+              variant="ghost"
+              onClick={() => setExcludeOpen((o) => !o)}
+              aria-expanded={excludeOpen}
+              aria-controls="export-excludes"
+              title="Leave chosen backend usernames out of the PDF, by payment method"
+            >
+              Exclude from PDF{excludes.length ? ` (${excludes.length})` : ""}
+            </Button>
             <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer" title="Inside each payment method, group rows by backend username with a subtotal each">
               <input type="checkbox" className="accent-red-600" checked={groupByUsername} onChange={(e) => setGroupByUsername(e.target.checked)} />
               Group by backend username
@@ -378,6 +392,7 @@ const FilterBar: React.FC<Props> = ({ filters, onChange, games, showUserSearch =
         )}
       </div>
       {onExport && mergeOpen && <MergeUsernamesPanel merges={merges} onChange={setMerges} names={names} />}
+      {onExport && excludeOpen && <ExcludeEntriesPanel rules={excludes} onChange={setExcludes} names={names} />}
       {onExport && pickerOpen && (
         <div id="export-columns" className="anim-fade rounded-lg border border-gray-700 bg-black/40 p-3">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-2">

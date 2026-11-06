@@ -380,6 +380,7 @@ export async function trackedWrite<R extends { headers: Record<string, unknown> 
       }
       Object.entries(own).forEach(([d, v]) => known.set(d, v)); // straight from the server, just now
       persist();
+      channel?.postMessage({ versions: own }); // other tabs treat this like a pushed bump
     }
     return res;
   } finally {
@@ -397,6 +398,17 @@ export async function trackedWrite<R extends { headers: Record<string, unknown> 
       if (Object.keys(held).length) applyVersions(held);
     }
   }
+}
+
+/**
+ * After a `trackedWrite` whose result was patched into a cached list: drop what the write made stale
+ * in this tab, but not `keep` (the patched entry) or a mounted delta-synced list, which is told to
+ * fetch just the changed rows instead of reloading. Without versions from the server, `keep` can't
+ * be proven current, so it is dropped too.
+ */
+export function settleWrite(prefixes: string[], own?: Versions, keep?: string) {
+  const stays = (key: string) => (!!own && key === keep) || (!!store.get(key)?.deltaDeps?.length && listeners.has(key));
+  dropLocal(prefixes, stays, own);
 }
 
 /** Call `fn` whenever the entry for this URL is dropped (so a mounted view can refetch it). */
@@ -493,8 +505,8 @@ export const whenIdle = (fn: () => void) => {
 
 const channel: BroadcastChannel | null = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("app-cache") : null;
 
-const dropLocal = (prefixes: string[]) => {
-  const hit = (key: string) => prefixes.some((p) => key.startsWith(p));
+const dropLocal = (prefixes: string[], stays: (key: string) => boolean = () => false, deps?: Versions) => {
+  const hit = (key: string) => prefixes.some((p) => key.startsWith(p)) && !stays(key);
   const dropped: string[] = [];
   for (const key of Array.from(store.keys())) {
     if (hit(key)) {
@@ -510,7 +522,7 @@ const dropLocal = (prefixes: string[]) => {
     }
   }
   persist();
-  notify(dropped, { prefixes });
+  notify(dropped, { prefixes, deps });
 };
 
 /** Drop cached entries (and in-flight requests) whose URL starts with any of the prefixes, in every tab. */
@@ -520,8 +532,9 @@ export function invalidateCached(...prefixes: string[]) {
 }
 
 // Another tab wrote something: drop our copies too
-channel?.addEventListener("message", (e: MessageEvent<{ prefixes?: string[] }>) => {
+channel?.addEventListener("message", (e: MessageEvent<{ prefixes?: string[]; versions?: Versions }>) => {
   if (Array.isArray(e.data?.prefixes)) dropLocal(e.data.prefixes);
+  if (e.data?.versions) applyVersions(e.data.versions);
 });
 
 /** Forget everything, e.g. on logout or login so the next user never sees cached data. */

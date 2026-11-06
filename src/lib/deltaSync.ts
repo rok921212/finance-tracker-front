@@ -106,7 +106,7 @@ export function useDeltaSync<T>(opts: {
 
     const onChanged = (e: Event) => {
       const detail = (e as CustomEvent<DataChangedDetail>).detail || {};
-      // (A write in this or another tab drops the list's entry: the subscription above reloads it)
+      // (A write that drops the list's entry is reloaded by the subscription above)
       const moved = Object.entries(detail.deps || {}).filter(([d]) => d.startsWith(LIST_DEP_PREFIX));
       if (!moved.length) return;
       pendingVersions = { ...pendingVersions, ...Object.fromEntries(moved) };
@@ -147,8 +147,8 @@ export function mergeChanges<R extends { id: string; date: string }>(
         total -= 1;
       }
     } else if (match && page.page === 1 && (!opts.loadedAt || createdAt > opts.loadedAt)) {
-      // New since this page was loaded: insert in date order
-      const pos = items.findIndex((r) => r.date < ch.date);
+      // New since this page was loaded: insert in date order, above older rows of the same day
+      const pos = items.findIndex((r) => r.date <= ch.date);
       const at = pos === -1 ? items.length : pos;
       if (at < opts.limit) {
         items.splice(at, 0, row as unknown as R);

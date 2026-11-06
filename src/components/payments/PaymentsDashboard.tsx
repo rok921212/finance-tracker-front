@@ -2,16 +2,18 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link, useSearchParams } from "react-router-dom";
 import AppHeader from "./AppHeader";
 import SummaryCards from "./SummaryCards";
-import { Page, Card, Banner, Spinner, inputClass } from "../ui/ui";
+import { Page, Card, Banner, Button, Spinner, inputClass } from "../ui/ui";
 import ImageViewer from "../ui/ImageViewer";
 import {
   deleteMyPayment,
+  downloadMyPdf,
   getMyPayment,
   getMyPayments,
   getMySummary,
   isDefaultView,
   MyListView,
   MySort,
+  myFilterParams,
   myPaymentsParams,
   MY_PAGE_SIZE,
   MySummary,
@@ -23,6 +25,8 @@ import { peekCached, updateCached, useDropTick } from "../../lib/cache";
 import { mergeChanges, useDeltaSync } from "../../lib/deltaSync";
 import { errorMessage } from "../../lib/http";
 import { preloadImage } from "../../lib/preloadImage";
+import { useSaves } from "../../lib/pendingSaves";
+import SaveRows from "./SaveRows";
 import { formatCents, formatDay } from "../../utils/money";
 
 const SORTS: MySort[] = ["date", "deposit", "loaded", "redeemed", "cashout", "player", "gameUsername", "paymentMethod"];
@@ -49,15 +53,25 @@ const SORT_OPTIONS = [
   { value: "paymentMethod:desc", label: "Payment method: Z → A" },
 ];
 
-// Sort and player filter live in the URL (?sort=deposit&order=desc&player=superman), so refresh/back keep them
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const dayParam = (sp: URLSearchParams, key: string) => {
+  const v = sp.get(key) || "";
+  return DAY_RE.test(v) ? v : "";
+};
+
+// Sort and filters live in the URL (?sort=deposit&order=desc&player=superman&dateFrom=2026-11-01), so refresh/back keep them
 const readView = (sp: URLSearchParams): MyListView => {
   const sort = sp.get("sort") as MySort | null;
   const order = sp.get("order");
   const player = (sp.get("player") || "").trim();
+  const dateFrom = dayParam(sp, "dateFrom");
+  const dateTo = dayParam(sp, "dateTo");
   return {
     ...(sort && SORTS.includes(sort) && sort !== "date" ? { sort } : {}),
     ...(order === "asc" || order === "desc" ? { order } : {}),
     ...(player ? { player } : {}),
+    ...(dateFrom ? { dateFrom } : {}),
+    ...(dateTo ? { dateTo } : {}),
   };
 };
 
@@ -97,7 +111,7 @@ const PaymentsDashboard: React.FC = () => {
       (prev) => {
         const next = { ...readView(prev), ...patch };
         const sp = new URLSearchParams(prev);
-        for (const k of ["sort", "order", "player"] as const) {
+        for (const k of ["sort", "order", "player", "dateFrom", "dateTo"] as const) {
           const v = next[k];
           if (v) sp.set(k, v);
           else sp.delete(k);
@@ -108,6 +122,9 @@ const PaymentsDashboard: React.FC = () => {
     );
   };
   const viewKey = JSON.stringify(view);
+  // Entries still uploading in the background, or that failed and need a decision
+  const openSaves = useSaves().filter((s) => s.status !== "saved");
+  const filtered = !!(view.player || view.dateFrom || view.dateTo);
 
   // Clicking a column header sorts by it; clicking again flips the direction
   const sortBy = (col: MySort) => {
@@ -132,7 +149,7 @@ const PaymentsDashboard: React.FC = () => {
   }, [playerInput]);
   // Render the last cached copy immediately; revalidation (ETag) happens in the background
   const [summary, setSummary] = useState<MySummary | null>(
-    () => peekCached<MySummary>("/payments/summary", view.player ? { player: view.player } : undefined) || null
+    () => peekCached<MySummary>("/payments/summary", myFilterParams(view)) || null
   );
   const [data, setData] = useState<Paged<PaymentRow> | null>(
     () => peekCached<Paged<PaymentRow>>("/payments", myPaymentsParams(1, view)) || null
@@ -148,12 +165,12 @@ const PaymentsDashboard: React.FC = () => {
   } | null>(null);
 
   const loadSummary = useCallback(() => {
-    getMySummary(view.player)
+    getMySummary({ player: view.player, dateFrom: view.dateFrom, dateTo: view.dateTo })
       .then(setSummary)
       .catch((e) => setError(errorMessage(e, "Could not load summary")));
-  }, [view.player]);
+  }, [view.player, view.dateFrom, view.dateTo]);
   // Refetched only when the server pushes a change to the totals
-  const summaryChanged = useDropTick("/payments/summary", view.player ? { player: view.player } : undefined);
+  const summaryChanged = useDropTick("/payments/summary", myFilterParams(view));
   useEffect(loadSummary, [loadSummary, summaryChanged]);
 
   // ---- rows beyond page 1 (infinite scroll: no page switching) ----
@@ -163,7 +180,7 @@ const PaymentsDashboard: React.FC = () => {
   const loadingMoreRef = useRef(false);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  // A new sort / player filter starts again from the first rows
+  // A new sort / filter starts again from the first rows
   useEffect(() => {
     pagesLoaded.current = 1;
     moreSeq.current += 1;
@@ -235,7 +252,7 @@ const PaymentsDashboard: React.FC = () => {
     params: {},
     sync: data?.sync,
     onChanges: (changes) => {
-      // New rows are merged in by date; any other order or a player filter reloads instead
+      // New rows are merged in by date; any other order or a filter reloads instead
       if (!isDefaultView(view)) {
         loadPage();
         loadSummary();
@@ -324,6 +341,20 @@ const PaymentsDashboard: React.FC = () => {
     }
   };
 
+  // PDF of the entries matching the player and date filters on screen
+  const [exporting, setExporting] = useState(false);
+  const onDownloadPdf = async () => {
+    setExporting(true);
+    setError("");
+    try {
+      await downloadMyPdf(view);
+    } catch (e) {
+      setError(errorMessage(e, "Could not create the PDF"));
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const [sortCol, sortDir] = currentSort(view);
   // Called as a function (not <SortHead/>) so the header cells are not remounted on every render
   const sortHead = (col: MySort, children: string, right = false) => (
@@ -397,6 +428,11 @@ const PaymentsDashboard: React.FC = () => {
       <AppHeader />
       <div className="max-w-7xl mx-auto px-4 md:px-8 py-6 md:py-8 space-y-6">
         {error && <Banner>{error}</Banner>}
+        {openSaves.length > 0 && (
+          <Card title="Saving entries">
+            <SaveRows saves={openSaves} />
+          </Card>
+        )}
 
         {/* Overview: each total with its split by payment method or game */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 items-start">
@@ -406,21 +442,26 @@ const PaymentsDashboard: React.FC = () => {
         <Card
           title="My Entries"
           actions={
-            <Link
-              to="/payments/new"
-              className="inline-flex items-center px-4 py-2 rounded-lg font-semibold bg-gradient-to-r from-red-600 to-red-700 text-white border border-red-500 hover:from-red-700 hover:to-red-800"
-            >
-              + Add Entry
-            </Link>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="ghost" onClick={onDownloadPdf} loading={exporting} disabled={exporting} title="Download these entries as a PDF, with totals per backend username">
+                PDF
+              </Button>
+              <Link
+                to="/payments/new"
+                className="inline-flex items-center px-4 py-2 rounded-lg font-semibold bg-gradient-to-r from-red-600 to-red-700 text-white border border-red-500 hover:from-red-700 hover:to-red-800"
+              >
+                + Add Entry
+              </Link>
+            </div>
           }
         >
           <div className="flex flex-col sm:flex-row gap-3 mb-4">
             <label className="flex-1 min-w-0">
-              <span className="block text-xs text-gray-400 mb-1">Player</span>
+              <span className="block text-xs text-gray-400 mb-1">Player or tag</span>
               <div className="relative">
                 <input
                   className={`${inputClass} pr-9`}
-                  placeholder="Show only one player, e.g. superman"
+                  placeholder="Player name or payment tag"
                   value={playerInput}
                   maxLength={60}
                   onChange={(e) => setPlayerInput(e.target.value)}
@@ -428,7 +469,7 @@ const PaymentsDashboard: React.FC = () => {
                 {playerInput && (
                   <button
                     type="button"
-                    aria-label="Clear player filter"
+                    aria-label="Clear player or tag filter"
                     onClick={() => setPlayerInput("")}
                     className="absolute inset-y-0 right-0 px-3 text-gray-400 hover:text-white text-lg leading-none"
                   >
@@ -436,6 +477,26 @@ const PaymentsDashboard: React.FC = () => {
                   </button>
                 )}
               </div>
+            </label>
+            <label className="sm:w-40">
+              <span className="block text-xs text-gray-400 mb-1">From</span>
+              <input
+                type="date"
+                className={inputClass}
+                value={view.dateFrom || ""}
+                max={view.dateTo}
+                onChange={(e) => setView({ dateFrom: e.target.value || undefined })}
+              />
+            </label>
+            <label className="sm:w-40">
+              <span className="block text-xs text-gray-400 mb-1">To</span>
+              <input
+                type="date"
+                className={inputClass}
+                value={view.dateTo || ""}
+                min={view.dateFrom}
+                onChange={(e) => setView({ dateTo: e.target.value || undefined })}
+              />
             </label>
             <label className="sm:w-64">
               <span className="block text-xs text-gray-400 mb-1">Sort by</span>
@@ -455,10 +516,38 @@ const PaymentsDashboard: React.FC = () => {
               </select>
             </label>
           </div>
-          {view.player && (
+          {filtered && (
             <p className="text-sm text-gray-400 mb-4">
-              Showing entries for player <span className="text-white font-semibold">{view.player}</span>
-              {data && !loading ? ` · ${total} ${total === 1 ? "entry" : "entries"}` : ""} (totals above are for this player)
+              Showing entries
+              {view.player && (
+                <>
+                  {" "}
+                  for players or tags starting with <span className="text-white font-semibold">{view.player}</span>
+                </>
+              )}
+              {view.dateFrom && (
+                <>
+                  {" "}
+                  from <span className="text-white font-semibold">{view.dateFrom}</span>
+                </>
+              )}
+              {view.dateTo && (
+                <>
+                  {" "}
+                  to <span className="text-white font-semibold">{view.dateTo}</span>
+                </>
+              )}
+              {data && !loading ? ` · ${total} ${total === 1 ? "entry" : "entries"}` : ""} (totals above match these filters)
+              <button
+                type="button"
+                className="ml-2 text-gray-400 underline hover:text-white"
+                onClick={() => {
+                  setPlayerInput("");
+                  setView({ player: undefined, dateFrom: undefined, dateTo: undefined });
+                }}
+              >
+                Clear filters
+              </button>
             </p>
           )}
 
@@ -468,7 +557,7 @@ const PaymentsDashboard: React.FC = () => {
             </div>
           )}
           {!loading && data && rows.length === 0 && (
-            <p className="text-center text-gray-500 py-8">{view.player ? "No entries for this player" : "No records found"}</p>
+            <p className="text-center text-gray-500 py-8">{filtered ? "No entries match these filters" : "No records found"}</p>
           )}
 
           {!loading && rows.length > 0 && (

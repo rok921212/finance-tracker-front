@@ -5,7 +5,6 @@ import AppHeader from "./AppHeader";
 import ScreenshotDropzone, { MAX_CASHOUT_PROOF_BYTES } from "./ScreenshotDropzone";
 import { Page, Card, Button, Field, Banner, Modal, Spinner, inputClass } from "../ui/ui";
 import {
-  createPayment,
   updatePayment,
   getActiveGames,
   peekActiveGames,
@@ -24,6 +23,8 @@ import { compressCashoutProof, compressScreenshot } from "../../lib/compressImag
 import { preloadOcr, readScreenshotText } from "../../lib/ocr";
 import { parseReceipt } from "../../lib/parseReceipt";
 import SuggestInput from "../ui/SuggestInput";
+import { startSave, useSaves } from "../../lib/pendingSaves";
+import SaveRows from "./SaveRows";
 
 type Errors = Partial<
   Record<
@@ -64,16 +65,6 @@ const AutoBadge: React.FC<{ on: boolean }> = ({ on }) =>
       auto · check
     </span>
   ) : null;
-
-/** Entries saved in this visit to the form (it stays open for the next one) */
-interface SavedEntry {
-  id: string;
-  player: string;
-  deposit: string;
-  game: string;
-  gameUsername: string;
-  at: Date;
-}
 
 /** Serves both /payments/new and /payments/:id/edit. */
 const AddPaymentForm: React.FC = () => {
@@ -119,7 +110,7 @@ const AddPaymentForm: React.FC = () => {
   // Previous backend usernames: this game's first, then the user's others
   const [gameNames, setGameNames] = useState<string[]>([]);
   const [allNames, setAllNames] = useState<string[]>([]);
-  const [saved, setSaved] = useState<SavedEntry[]>([]);
+  const saves = useSaves();
   const topRef = useRef<HTMLDivElement>(null);
 
   const clearAuto = (field: AutoField) =>
@@ -280,10 +271,7 @@ const AddPaymentForm: React.FC = () => {
 
   const submit = async (allowDuplicate = false) => {
     if (inFlight.current) return;
-    inFlight.current = true;
-    setSubmitting(true);
     setSubmitError("");
-    setProgress(0);
 
     const form = new FormData();
     form.append("date", date);
@@ -302,28 +290,21 @@ const AddPaymentForm: React.FC = () => {
     if (allowDuplicate) form.append("allowDuplicate", "true");
     // On edit, omitted files keep the entry's current images. Images are shrunk in the browser first
     // (already started when they were picked), so only a few hundred KB go over the network.
-    const [shot, proof] = await Promise.all([
+    const withImages = Promise.all([
       file ? compressScreenshot(file) : null,
       // A screenshot picked before the cashout amount was cleared is not sent
       cashoutProof && hasCashout ? compressCashoutProof(cashoutProof) : null,
-    ]);
-    if (shot) form.append("screenshot", shot);
-    if (proof) form.append("cashoutProof", proof);
+    ]).then(([shot, proof]) => {
+      if (shot) form.append("screenshot", shot);
+      if (proof) form.append("cashoutProof", proof);
+      return form;
+    });
 
-    try {
-      if (editId) {
-        await updatePayment(editId, form, setProgress);
-        navigate("/payments");
-        return;
-      }
-      // New entry: stay on the form for the next one (no page change or reload). Game, backend
-      // username and date are kept; the rest is cleared for the next screenshot.
-      const res = await createPayment(form, setProgress);
+    if (!editId) {
+      // New entry: saved in the background, so the form is ready for the next one at once. Game,
+      // backend username and date are kept; the rest is cleared for the next screenshot.
       const gameName = isCustomGame ? customGame.trim() : games?.find((g) => g.id === gameId)?.name || "";
-      setSaved((prev) => [
-        { id: res.payment.id, player: player.trim(), deposit: deposit.trim(), game: gameName, gameUsername: gameUsername.trim(), at: new Date() },
-        ...prev,
-      ]);
+      startSave({ player: player.trim(), deposit: deposit.trim(), game: gameName, gameUsername: gameUsername.trim() }, withImages);
       const name = gameUsername.trim();
       const withName = (list: string[]) => [name, ...list.filter((n) => n.toLowerCase() !== name.toLowerCase())];
       if (name) {
@@ -346,6 +327,15 @@ const AddPaymentForm: React.FC = () => {
       setAutoFilled(new Set());
       dateTouched.current = false;
       topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+
+    inFlight.current = true;
+    setSubmitting(true);
+    setProgress(0);
+    try {
+      await updatePayment(editId, await withImages, setProgress);
+      navigate("/payments");
     } catch (e) {
       if (errorCode(e) === "DUPLICATE_SCREENSHOT") {
         const existing = (e as AxiosError<{ existing?: { date: string } }>).response?.data?.existing;
@@ -402,9 +392,11 @@ const AddPaymentForm: React.FC = () => {
         <Card title={isEdit ? "Edit Payment Entry" : "Add Payment Entry"}>
           <form onSubmit={onSubmit} className="space-y-5" noValidate>
             {gamesError && <Banner>{gamesError}</Banner>}
-            {!isEdit && saved.length > 0 && (
-              <Banner tone="ok">
-                Saved ✓ {saved[0].player} · ${saved[0].deposit}. Drop or paste (Ctrl+V) the next screenshot.
+            {!isEdit && saves.length > 0 && (
+              <Banner tone={saves[0].status === "failed" ? "error" : "ok"}>
+                {saves[0].status === "failed"
+                  ? `Could not save ${saves[0].player}. See the list below.`
+                  : `${saves[0].status === "saved" ? "Saved ✓" : "Saving"} ${saves[0].player} · $${saves[0].deposit}. Drop or paste (Ctrl+V) the next screenshot.`}
               </Banner>
             )}
             {submitError && <Banner>{submitError}</Banner>}
@@ -732,27 +724,9 @@ const AddPaymentForm: React.FC = () => {
           </form>
         </Card>
 
-        {!isEdit && saved.length > 0 && (
-          <Card title={`Added this session (${saved.length})`} className="mt-6">
-            <ul className="divide-y divide-gray-800 text-sm">
-              {saved.map((e) => (
-                <li key={e.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
-                  <span className="text-gray-200">
-                    <span className="font-medium">{e.player}</span>
-                    <span className="text-gray-400">
-                      {" "}
-                      · ${e.deposit} · {e.game} · {e.gameUsername}
-                    </span>
-                  </span>
-                  <span className="flex items-center gap-3 text-xs text-gray-500">
-                    {e.at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
-                    <button type="button" className="text-yellow-300 hover:underline" onClick={() => navigate(`/payments/${e.id}/edit`)}>
-                      Edit
-                    </button>
-                  </span>
-                </li>
-              ))}
-            </ul>
+        {!isEdit && saves.length > 0 && (
+          <Card title={`Added this session (${saves.length})`} className="mt-6">
+            <SaveRows saves={saves} />
             <div className="mt-3 flex justify-end">
               <Button variant="ghost" onClick={() => navigate("/payments")}>
                 Done, view all entries
